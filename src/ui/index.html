@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Shopify Media Sync</title>
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'self' 'unsafe-inline' 'unsafe-eval' file: data:;"
+        />
+        <style>
+            body {
+                font-family: "Segoe UI", sans-serif;
+                padding: 20px;
+                background: #f0f2f5;
+                color: #333;
+            }
+            .container {
+                max-width: 1100px;
+                margin: 0 auto;
+                background: white;
+                padding: 30px;
+                border-radius: 12px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            }
+
+            /* Tabs */
+            .tab-nav {
+                display: flex;
+                border-bottom: 2px solid #ddd;
+                margin-bottom: 20px;
+            }
+            .tab-btn {
+                padding: 10px 20px;
+                cursor: pointer;
+                font-weight: 600;
+                color: #666;
+                border-bottom: 2px solid transparent;
+                margin-bottom: -2px;
+            }
+            .tab-btn:hover {
+                color: #008060;
+            }
+            .tab-btn.active {
+                color: #008060;
+                border-bottom-color: #008060;
+            }
+
+            /* Debugging help */
+            #fullLibraryArea {
+                min-height: 200px;
+                border: 1px dashed #eee;
+            }
+            .tab-content {
+                display: none;
+            }
+            .tab-content.active {
+                display: block;
+            }
+
+            h1 {
+                margin-top: 0;
+                color: #1a1a1a;
+            }
+
+            .config-box {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 15px;
+                margin-bottom: 25px;
+                background: #fafafa;
+                padding: 20px;
+                border-radius: 8px;
+                border: 1px solid #eee;
+            }
+            .input-group {
+                display: flex;
+                flex-direction: column;
+            }
+            .input-group label {
+                font-size: 0.85em;
+                font-weight: 600;
+                margin-bottom: 5px;
+                color: #666;
+            }
+
+            input {
+                padding: 10px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            input:focus {
+                outline: none;
+                border-color: #008060;
+                box-shadow: 0 0 0 2px rgba(0, 128, 96, 0.1);
+            }
+
+            button {
+                padding: 12px 24px;
+                background: #008060;
+                color: white;
+                border: none;
+                cursor: pointer;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 14px;
+                transition: background 0.2s;
+            }
+            button:hover {
+                background: #004c3f;
+            }
+            button:disabled {
+                background: #ccc;
+                cursor: not-allowed;
+            }
+
+            #pathDisplay {
+                background: #eee;
+                cursor: not-allowed;
+                color: #555;
+            }
+
+            /* Progress Bar */
+            .progress-container {
+                margin: 20px 0;
+                display: none;
+            }
+            .progress-bar-bg {
+                background: #eee;
+                height: 8px;
+                border-radius: 4px;
+                overflow: hidden;
+            }
+            .progress-bar-fill {
+                background: #008060;
+                height: 100%;
+                width: 0%;
+                transition: width 0.3s ease;
+            }
+            .status-text {
+                text-align: center;
+                margin-top: 8px;
+                font-size: 0.9em;
+                color: #666;
+            }
+
+            /* Results */
+            .stats {
+                display: flex;
+                gap: 20px;
+                margin-bottom: 20px;
+            }
+
+            /* Gallery Styles */
+            .product-row {
+                background: white;
+                border: 1px solid #e1e3e5;
+                margin-bottom: 20px;
+                border-radius: 8px;
+                padding: 15px;
+            }
+            .product-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 12px;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+            }
+            .product-title {
+                font-weight: 600;
+                color: #202223;
+                font-size: 1.1em;
+            }
+            .gallery-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+            }
+            .media-card {
+                position: relative;
+                width: 120px;
+                height: 120px;
+                border-radius: 6px;
+                overflow: hidden;
+                border: 2px solid #ddd;
+                background: #f9f9f9;
+            }
+            .media-card img,
+            .media-card video {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+
+            /* Badging Status */
+            .status-new {
+                border-color: #2c6ecb;
+                box-shadow: 0 0 0 2px rgba(44, 110, 203, 0.2);
+            }
+            .status-updated {
+                border-color: #008060;
+                box-shadow: 0 0 0 2px rgba(0, 128, 96, 0.2);
+            }
+            .status-reordered {
+                border-color: #e4a100;
+                box-shadow: 0 0 0 2px rgba(228, 161, 0, 0.2);
+            }
+
+            .corner-badge {
+                position: absolute;
+                top: 0;
+                right: 0;
+                font-size: 10px;
+                padding: 2px 6px;
+                color: white;
+                font-weight: bold;
+                border-bottom-left-radius: 6px;
+                z-index: 2;
+            }
+            .tag-new {
+                background: #2c6ecb;
+            }
+            .tag-updated {
+                background: #008060;
+            }
+            .tag-reordered {
+                background: #e4a100;
+                color: #202223;
+            }
+            .tag-local {
+                background: #666;
+                color: #fff;
+            } /* Grey for local-only/orphan files */
+
+            .filename-label {
+                position: absolute;
+                bottom: 0;
+                width: 100%;
+                background: rgba(0, 0, 0, 0.6);
+                color: white;
+                font-size: 9px;
+                padding: 2px 4px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            .stat-card {
+                background: #f9fafb;
+                padding: 15px;
+                border-radius: 8px;
+                border: 1px solid #e1e3e5;
+                flex: 1;
+                text-align: center;
+            }
+            .stat-val {
+                display: block;
+                font-size: 1.5em;
+                font-weight: bold;
+                color: #1a1a1a;
+            }
+
+            .log-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.9em;
+            }
+            .log-table th {
+                text-align: left;
+                padding: 10px;
+                border-bottom: 2px solid #ddd;
+                color: #555;
+            }
+            .log-table td {
+                padding: 8px 10px;
+                border-bottom: 1px solid #eee;
+            }
+            .badge {
+                padding: 3px 8px;
+                border-radius: 12px;
+                font-size: 0.8em;
+                font-weight: 600;
+            }
+
+            .badge-NEW_ASSET {
+                background: #e3f9e5;
+                color: #0d5e1b;
+            }
+            .badge-REORDERED {
+                background: #fff4ce;
+                color: #5c470a;
+            }
+            .badge-DELETED_ASSET {
+                background: #ffe3e3;
+                color: #8a0b0b;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Shopify Media Localizer</h1>
+
+            <div class="tab-nav">
+                <div class="tab-btn active" onclick="switchTab('dashboard')">
+                    Sync Dashboard
+                </div>
+                <div class="tab-btn" onclick="switchTab('library')">
+                    Full Library
+                </div>
+            </div>
+
+            <div id="tab-dashboard" class="tab-content active">
+                <div
+                    id="errorArea"
+                    style="
+                        display: none;
+                        background: #ffebee;
+                        color: #b71c1c;
+                        padding: 15px;
+                        border-radius: 6px;
+                        margin-bottom: 20px;
+                        border: 1px solid #ef9a9a;
+                    "
+                >
+                    <h3 style="margin: 0 0 10px 0; font-size: 1.1em">Error</h3>
+                    <div
+                        id="errorMsg"
+                        style="
+                            font-family: Consolas, monospace;
+                            white-space: pre-wrap;
+                            word-break: break-word;
+                            user-select: text;
+                            -webkit-user-select: text;
+                        "
+                    ></div>
+                    <button
+                        onclick="document.getElementById('errorArea').style.display='none'"
+                        style="
+                            margin-top: 10px;
+                            background: #d32f2f;
+                            color: white;
+                            border: none;
+                            padding: 6px 12px;
+                            border-radius: 4px;
+                            font-size: 12px;
+                            cursor: pointer;
+                        "
+                    >
+                        Dismiss
+                    </button>
+                </div>
+
+                <div class="config-box">
+                    <div class="input-group">
+                        <label>Shop URL</label>
+                        <input
+                            type="text"
+                            id="shopUrl"
+                            placeholder="example.myshopify.com"
+                        />
+                    </div>
+                    <div class="input-group">
+                        <label>Admin API Token</label>
+                        <input
+                            type="password"
+                            id="apiKey"
+                            placeholder="shpat_xxxxxxxxxxxxxxxx"
+                        />
+                    </div>
+                    <div class="input-group" style="grid-column: span 2">
+                        <label
+                            >Metafields (namespace.key, comma separated)</label
+                        >
+                        <input
+                            type="text"
+                            id="metafields"
+                            placeholder="custom.size_guide, my_fields.packaging"
+                        />
+                    </div>
+                    <div class="input-group" style="grid-column: span 2">
+                        <label>Download Location</label>
+                        <div style="display: flex; gap: 10px">
+                            <input
+                                type="text"
+                                id="pathDisplay"
+                                readonly
+                                placeholder="No folder selected"
+                                style="flex: 1"
+                            />
+                            <button
+                                onclick="selectFolder()"
+                                style="background: #444"
+                            >
+                                Browse...
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 20px">
+                    <div style="margin-bottom: 15px">
+                        <label
+                            style="
+                                cursor: pointer;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                gap: 8px;
+                            "
+                        >
+                            <input type="checkbox" id="dryRun" checked />
+                            <span style="font-weight: 600; color: #202223"
+                                >Simulation Mode</span
+                            >
+                            <span style="font-size: 0.9em; color: #666"
+                                >(Check for changes without downloading)</span
+                            >
+                        </label>
+                    </div>
+                    <button
+                        onclick="startSync()"
+                        id="syncBtn"
+                        style="min-width: 200px"
+                    >
+                        CHECK FOR UPDATES
+                    </button>
+                </div>
+
+                <div class="progress-container" id="progressArea">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="progFill"></div>
+                    </div>
+                    <div class="status-text" id="statusText">
+                        Initializing...
+                    </div>
+                </div>
+
+                <hr
+                    style="
+                        margin: 30px 0;
+                        border: 0;
+                        border-top: 1px solid #eee;
+                    "
+                />
+
+                <div id="resultsArea" style="display: none">
+                    <h3>Sync Report</h3>
+                    <div class="stats">
+                        <div class="stat-card">
+                            <span class="stat-val" id="statProducts">0</span>
+                            Products Scanned
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-val" id="statDownloads">0</span>
+                            Files Downloaded
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-val" id="statChanges">0</span>
+                            Total Changes
+                        </div>
+                    </div>
+
+                    <div
+                        style="
+                            max-height: 400px;
+                            overflow-y: auto;
+                            border: 1px solid #eee;
+                            border-radius: 8px;
+                        "
+                    >
+                        <table class="log-table">
+                            <thead>
+                                <tr>
+                                    <th>Product</th>
+                                    <th>Change Type</th>
+                                    <th>Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody id="logBody"></tbody>
+                        </table>
+                    </div>
+
+                    <h3>Visual Verification</h3>
+                    <div id="galleryArea">
+                        <p
+                            style="
+                                text-align: center;
+                                color: #777;
+                                padding: 20px;
+                            "
+                        >
+                            Detailed gallery will appear here for products with
+                            changes.
+                        </p>
+                    </div>
+                </div>
+                <!-- End resultsArea -->
+            </div>
+            <!-- End tab-dashboard -->
+
+            <!-- Library Tab -->
+            <div id="tab-library" class="tab-content">
+                <div
+                    style="
+                        margin-bottom: 20px;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                    "
+                >
+                    <button
+                        onclick="loadLocalLibrary(true)"
+                        style="
+                            padding: 8px 16px;
+                            background: #f1f2f3;
+                            color: #333;
+                            border: 1px solid #ccc;
+                        "
+                    >
+                        Refresh Library
+                    </button>
+                    <div style="display: flex; gap: 10px; align-items: center">
+                        <select
+                            id="categoryFilter"
+                            onchange="filterLibrary()"
+                            style="
+                                padding: 8px;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                            "
+                        >
+                            <option value="">All Categories</option>
+                            <option value="skin-science">skin-science</option>
+                            <option value="cosmetic-and-glam">
+                                cosmetic-and-glam
+                            </option>
+                            <option value="masks-and-patches">
+                                masks-and-patches
+                            </option>
+                            <option value="makeup-tools-and-brushes">
+                                makeup-tools-and-brushes
+                            </option>
+                            <option value="care-tools-and-brushes">
+                                care-tools-and-brushes
+                            </option>
+                            <option value="hair-and-body-care">
+                                hair-and-body-care
+                            </option>
+                            <option value="lash-collections">
+                                lash-collections
+                            </option>
+                            <option value="beauty-devices">
+                                beauty-devices
+                            </option>
+                            <option value="hair-accessories">
+                                hair-accessories
+                            </option>
+                            <option value="pro-and-diy-nail">
+                                pro-and-diy-nail
+                            </option>
+                            <option value="kid-product">kid-product</option>
+                            <option value="ruby-vibe-co-gift-set">
+                                ruby-vibe-co-gift-set
+                            </option>
+                        </select>
+                        <input
+                            type="text"
+                            id="libSearch"
+                            placeholder="Search products..."
+                            style="
+                                padding: 8px;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                                min-width: 300px;
+                            "
+                        />
+                    </div>
+                </div>
+                <div
+                    id="fullLibraryArea"
+                    style="
+                        min-height: 400px;
+                        background: #fafafa;
+                        padding: 10px;
+                    "
+                >
+                    <p style="text-align: center; color: #888">
+                        Click "Refresh Library" or select a folder to view your
+                        media.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <script src="renderer.js"></script>
+    </body>
+</html>
