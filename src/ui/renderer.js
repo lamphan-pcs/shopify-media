@@ -44,11 +44,7 @@ function switchTab(tabName) {
         const buttons = document.querySelectorAll(".tab-btn");
         // Find button by text content to be sure
         buttons.forEach((btn) => {
-            if (
-                btn.innerText
-                    .toLowerCase()
-                    .includes(tabName === "dashboard" ? "dashboard" : "library")
-            ) {
+            if (btn.innerText.toLowerCase().includes(tabName.toLowerCase())) {
                 btn.classList.add("active");
             }
         });
@@ -98,14 +94,52 @@ async function loadLocalLibrary(renderToLibraryTab = false) {
         cachedLibrary = products || [];
 
         if (renderToLibraryTab) {
-            renderGallery(cachedLibrary, "fullLibraryArea");
+            filterLibrary();
         }
     } catch (e) {
         console.error("Failed to load local library", e);
         if (renderToLibraryTab) {
-            document.getElementById(
-                "fullLibraryArea"
-            ).innerHTML = `<div style="color:red; padding:20px;">Error loading library: ${e.message}</div>`;
+            document.getElementById("fullLibraryArea").innerHTML =
+                `<div style="color:red; padding:20px;">Error loading library: ${e.message}</div>`;
+        }
+    }
+}
+
+async function cleanupLibrary() {
+    if (!selectedPath) return alert("No folder selected.");
+
+    if (
+        !confirm(
+            "Are you sure you want to clean up unused images?\n\nThis will permanently delete any image files in the current folder that are not referenced by the loaded product library. This cannot be undone.",
+        )
+    ) {
+        return;
+    }
+
+    const btn = document.getElementById("cleanupBtn");
+    const originalText = btn ? btn.innerText : "Clean Up";
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = "Cleaning...";
+    }
+
+    try {
+        const result = await ipcRenderer.invoke(
+            "cleanup-unused-images",
+            selectedPath,
+        );
+        alert(
+            `Cleanup Complete.\nScanned files: ${result.scanned}\nDeleted files: ${result.deleted}`,
+        );
+        // Refresh library to verify
+        loadLocalLibrary(true);
+    } catch (e) {
+        console.error("Cleanup Error:", e);
+        alert("Error during cleanup: " + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = originalText;
         }
     }
 }
@@ -134,6 +168,23 @@ function filterLibrary() {
 
         return matchesText && matchesCategory;
     });
+
+    // Sort: Products with updates first
+    filtered.sort((a, b) => {
+        const hasUpdate = (p) =>
+            p.media &&
+            p.media.some(
+                (m) =>
+                    m.status &&
+                    m.status !== "unchanged" &&
+                    m.status !== "local",
+            );
+        const aUp = hasUpdate(a);
+        const bUp = hasUpdate(b);
+        if (aUp === bUp) return 0;
+        return aUp ? -1 : 1;
+    });
+
     renderGallery(filtered, "fullLibraryArea");
 }
 
@@ -154,10 +205,11 @@ async function startSync() {
         const apiKeyInput = document.getElementById("apiKey");
         const metafieldsInput = document.getElementById("metafields");
         const dryRunInput = document.getElementById("dryRun");
+        const forceFullSyncInput = document.getElementById("forceFullSync");
 
         if (!shopUrlInput || !apiKeyInput || !metafieldsInput || !dryRunInput) {
             throw new Error(
-                "Critical UI Error: One or more input fields are missing from the DOM."
+                "Critical UI Error: One or more input fields are missing from the DOM.",
             );
         }
 
@@ -165,12 +217,15 @@ async function startSync() {
         const apiKey = apiKeyInput.value;
         const metafields = metafieldsInput.value;
         const dryRun = dryRunInput.checked;
+        const forceFullSync = forceFullSyncInput
+            ? forceFullSyncInput.checked
+            : false;
 
-        console.log("Config loaded", { shopUrl, dryRun });
+        console.log("Config loaded", { shopUrl, dryRun, forceFullSync });
 
         if (!shopUrl || !apiKey || !selectedPath) {
             return alert(
-                "Please complete all configuration fields (Shop URL, API Key, and Folder)."
+                "Please complete all configuration fields (Shop URL, API Key, and Folder).",
             );
         }
 
@@ -193,6 +248,7 @@ async function startSync() {
             downloadPath: selectedPath,
             metafieldKeys: metafields,
             dryRun,
+            forceFullSync,
         };
         console.log("Invoking IPC start-sync");
         const results = await ipcRenderer.invoke("start-sync", config);
@@ -243,9 +299,9 @@ function renderResults(data) {
         row.innerHTML = `
             <td>${c.product}</td>
             <td><span class="badge badge-${c.type}">${c.type.replace(
-            "_",
-            " "
-        )}</span></td>
+                "_",
+                " ",
+            )}</span></td>
             <td>${c.file}</td>
         `;
         tbody.appendChild(row);
@@ -264,13 +320,13 @@ function renderGallery(products, containerId, showAll = false) {
     console.log(
         `[renderGallery] Called with ${
             products?.length || 0
-        } products for #${containerId}`
+        } products for #${containerId}`,
     );
 
     const container = document.getElementById(containerId);
     if (!container) {
         alert(
-            `Critical Error: Target container #${containerId} not found in DOM.`
+            `Critical Error: Target container #${containerId} not found in DOM.`,
         );
         return;
     }
@@ -281,11 +337,21 @@ function renderGallery(products, containerId, showAll = false) {
     container.style.background = "#f9f9f9";
 
     // Clear and add debug header
+    let headerAction = "";
+    if (containerId === "fullLibraryArea") {
+        headerAction = `<div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.3);">
+            <button id="cleanupBtn" onclick="cleanupLibrary()" style="padding:8px 15px; background:#d32f2f; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold; font-size: 13px;">
+                🗑 Clean Up Unused Images
+            </button>
+        </div>`;
+    }
+
     container.innerHTML = `
         <div style="padding:15px; background:#4caf50; color:white; margin-bottom:15px; border-radius:4px;">
             <strong>Gallery Renderer Working</strong><br>
             Products loaded: ${products ? products.length : 0}<br>
             Container: #${containerId}
+            ${headerAction}
         </div>
     `;
 
@@ -439,7 +505,7 @@ function renderGallery(products, containerId, showAll = false) {
     });
 
     console.log(
-        `[renderGallery] Finished. Container now has ${container.children.length} children.`
+        `[renderGallery] Finished. Container now has ${container.children.length} children.`,
     );
 }
 
@@ -460,6 +526,229 @@ if (searchInput) {
         "keyup",
         debounce(() => {
             filterLibrary();
-        }, 400)
+        }, 400),
     );
 }
+
+let _shippingRows = [];
+let _shippingCarriers = [];
+let _shippingHasVariants = false;
+
+async function calculateShipping() {
+    const address1 = document.getElementById("shipAddress1").value.trim();
+    const city = document.getElementById("shipCity").value.trim();
+    const province = document.getElementById("shipProvince").value.trim();
+    const zip = document.getElementById("shipZip").value.trim();
+    const countryCode = document
+        .getElementById("shipCountryCode")
+        .value.trim()
+        .toUpperCase();
+    const handlesRaw = document.getElementById("shipHandles").value;
+
+    if (!address1 || !city || !zip || !countryCode) {
+        return alert(
+            "Please fill in Address Line 1, City, ZIP, and Country Code.",
+        );
+    }
+
+    const handles = handlesRaw
+        .split("\n")
+        .map((h) => h.trim())
+        .filter((h) => h.length > 0);
+
+    if (handles.length === 0) {
+        return alert("Please enter at least one product handle.");
+    }
+
+    const shopUrl = document.getElementById("shopUrl").value.trim();
+    const apiKey = document.getElementById("apiKey").value.trim();
+
+    if (!shopUrl || !apiKey) {
+        return alert(
+            "Please fill in Shop URL and API Token on the Sync Dashboard tab first.",
+        );
+    }
+
+    // Reset progressive state
+    _shippingRows = [];
+    _shippingCarriers = [];
+    _shippingHasVariants = false;
+
+    const btn = document.getElementById("shippingBtn");
+    btn.disabled = true;
+    btn.innerText = "CALCULATING...";
+
+    document.getElementById("shippingLoading").style.display = "block";
+    document.getElementById("shippingErrorArea").style.display = "none";
+
+    // Show table immediately (empty) so rows appear as they arrive
+    document.getElementById("shippingResultsArea").style.display = "block";
+    renderShippingTable({ rows: [], carriers: [], hasVariants: false });
+
+    const progressMsg = document.getElementById("shippingProgressMsg");
+    if (progressMsg)
+        progressMsg.textContent = `Starting — 0 / ${handles.length} products`;
+
+    try {
+        await ipcRenderer.invoke("calculate-shipping", {
+            shopUrl,
+            apiKey,
+            handles,
+            address: { address1, city, province, zip, countryCode },
+        });
+        // Table is fully built by shipping-progress events; nothing more to do here.
+    } catch (err) {
+        console.error("Shipping Calculation Error:", err);
+        const errDiv = document.getElementById("shippingErrorArea");
+        const errMsg = document.getElementById("shippingErrorMsg");
+        errDiv.style.display = "block";
+        errMsg.innerText = err.stack || err.message;
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "CALCULATE SHIPPING";
+        document.getElementById("shippingLoading").style.display = "none";
+        if (progressMsg) progressMsg.textContent = "";
+    }
+}
+
+function renderShippingTable(result) {
+    const { rows, carriers, hasVariants } = result;
+
+    const table = document.getElementById("shippingTable");
+    table.innerHTML = "";
+
+    const fixedCols = hasVariants
+        ? ["Handle", "Product Title", "Variant", "SKU", "Weight"]
+        : ["Handle", "Product Title", "SKU", "Weight"];
+    const allCols = [...fixedCols, ...carriers];
+
+    // Header row
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+
+    allCols.forEach((col) => {
+        const th = document.createElement("th");
+        th.textContent = col;
+        headerRow.appendChild(th);
+    });
+
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    // Body rows
+    const tbody = document.createElement("tbody");
+
+    if (rows.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = allCols.length;
+        td.style.textAlign = "center";
+        td.style.padding = "20px";
+        td.textContent = "No results.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+    } else {
+        rows.forEach((row) => {
+            const tr = document.createElement("tr");
+
+            const handleTd = document.createElement("td");
+            handleTd.textContent = row.handle;
+            handleTd.style.fontFamily = "Consolas, monospace";
+            handleTd.style.fontSize = "0.9em";
+            tr.appendChild(handleTd);
+
+            if (row.error) {
+                const titleTd = document.createElement("td");
+                titleTd.textContent = row.title || "—";
+                tr.appendChild(titleTd);
+
+                const errorTd = document.createElement("td");
+                errorTd.colSpan = allCols.length - 1;
+                errorTd.style.color = "#b71c1c";
+                errorTd.style.fontStyle = "italic";
+                errorTd.textContent = row.error;
+                tr.appendChild(errorTd);
+            } else {
+                const titleTd = document.createElement("td");
+                titleTd.textContent = row.title;
+                tr.appendChild(titleTd);
+
+                if (hasVariants) {
+                    const variantTd = document.createElement("td");
+                    variantTd.textContent = row.variant || "—";
+                    variantTd.style.fontSize = "0.85em";
+                    variantTd.style.color = "#555";
+                    tr.appendChild(variantTd);
+                }
+
+                const skuTd = document.createElement("td");
+                skuTd.textContent = row.sku || "—";
+                skuTd.style.fontSize = "0.85em";
+                skuTd.style.color = "#555";
+                tr.appendChild(skuTd);
+
+                const weightTd = document.createElement("td");
+                weightTd.textContent = row.weight || "—";
+                weightTd.style.fontSize = "0.85em";
+                weightTd.style.color = "#555";
+                tr.appendChild(weightTd);
+
+                carriers.forEach((carrier) => {
+                    const td = document.createElement("td");
+                    const rate = row.rates[carrier];
+                    if (rate) {
+                        td.textContent = rate;
+                        td.style.fontWeight = "600";
+                        td.style.color = "#006840";
+                    } else {
+                        td.textContent = "N/A";
+                        td.style.color = "#999";
+                    }
+                    tr.appendChild(td);
+                });
+            }
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    table.appendChild(tbody);
+    document.getElementById("shippingResultsArea").style.display = "block";
+}
+
+ipcRenderer.on("shipping-progress", (event, data) => {
+    const progressMsg = document.getElementById("shippingProgressMsg");
+
+    if (data.type === "lookup") {
+        if (progressMsg)
+            progressMsg.textContent = `[${data.current}/${data.total}] Looking up: ${data.handle}`;
+    } else if (data.type === "calculating") {
+        const variantPart = data.variantLabel ? ` / ${data.variantLabel}` : "";
+        if (progressMsg)
+            progressMsg.textContent = `[${data.current}/${data.total}] Fetching rates: ${data.title}${variantPart}`;
+    } else if (data.type === "row-done") {
+        _shippingRows.push(data.row);
+        _shippingCarriers = data.carriers;
+        if (data.hasVariants) _shippingHasVariants = true;
+        renderShippingTable({
+            rows: _shippingRows,
+            carriers: _shippingCarriers,
+            hasVariants: _shippingHasVariants,
+        });
+        const variantPart = data.row.variant ? ` / ${data.row.variant}` : "";
+        const label = data.row.error
+            ? `${data.row.handle}${variantPart} — ${data.row.error}`
+            : `${data.row.title || data.row.handle}${variantPart} — ${Object.keys(data.row.rates).length} carrier(s)`;
+        if (progressMsg)
+            progressMsg.textContent = `[${data.current}/${data.total} done] ${label}`;
+    } else if (data.type === "complete") {
+        _shippingCarriers = data.carriers;
+        if (data.hasVariants) _shippingHasVariants = true;
+        renderShippingTable({
+            rows: _shippingRows,
+            carriers: _shippingCarriers,
+            hasVariants: _shippingHasVariants,
+        });
+        if (progressMsg) progressMsg.textContent = "";
+    }
+});

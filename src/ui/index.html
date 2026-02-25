@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
     <head>
         <title>Shopify Media Sync</title>
@@ -307,6 +307,9 @@
                 <div class="tab-btn" onclick="switchTab('library')">
                     Full Library
                 </div>
+                <div class="tab-btn" onclick="switchTab('shipping')">
+                    Shipping Calculator
+                </div>
             </div>
 
             <div id="tab-dashboard" class="tab-content active">
@@ -334,7 +337,10 @@
                         "
                     ></div>
                     <button
-                        onclick="document.getElementById('errorArea').style.display='none'"
+                        onclick="
+                            document.getElementById('errorArea').style.display =
+                                'none'
+                        "
                         style="
                             margin-top: 10px;
                             background: #d32f2f;
@@ -414,6 +420,24 @@
                             >
                             <span style="font-size: 0.9em; color: #666"
                                 >(Check for changes without downloading)</span
+                            >
+                        </label>
+                        <label
+                            style="
+                                cursor: pointer;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                gap: 8px;
+                                margin-top: 5px;
+                            "
+                        >
+                            <input type="checkbox" id="forceFullSync" />
+                            <span style="font-weight: 600; color: #202223"
+                                >Force Full Scan</span
+                            >
+                            <span style="font-size: 0.9em; color: #666"
+                                >(Ignore cache / time check)</span
                             >
                         </label>
                     </div>
@@ -590,6 +614,187 @@
                     </p>
                 </div>
             </div>
+            <!-- End tab-library -->
+
+            <!-- Shipping Calculator Tab -->
+            <div id="tab-shipping" class="tab-content">
+                <div
+                    id="shippingErrorArea"
+                    style="
+                        display: none;
+                        background: #ffebee;
+                        color: #b71c1c;
+                        padding: 15px;
+                        border-radius: 6px;
+                        margin-bottom: 20px;
+                        border: 1px solid #ef9a9a;
+                    "
+                >
+                    <h3 style="margin: 0 0 10px 0; font-size: 1.1em">Error</h3>
+                    <div
+                        id="shippingErrorMsg"
+                        style="
+                            font-family: Consolas, monospace;
+                            white-space: pre-wrap;
+                            word-break: break-word;
+                            user-select: text;
+                            -webkit-user-select: text;
+                        "
+                    ></div>
+                    <button
+                        onclick="
+                            document.getElementById(
+                                'shippingErrorArea',
+                            ).style.display = 'none'
+                        "
+                        style="
+                            margin-top: 10px;
+                            background: #d32f2f;
+                            color: white;
+                            border: none;
+                            padding: 6px 12px;
+                            border-radius: 4px;
+                            font-size: 12px;
+                            cursor: pointer;
+                        "
+                    >
+                        Dismiss
+                    </button>
+                </div>
+
+                <div class="config-box">
+                    <div class="input-group">
+                        <label>Address Line 1</label>
+                        <input
+                            type="text"
+                            id="shipAddress1"
+                            placeholder="123 Main St"
+                        />
+                    </div>
+                    <div class="input-group">
+                        <label>City</label>
+                        <input type="text" id="shipCity" placeholder="Sydney" />
+                    </div>
+                    <div class="input-group">
+                        <label
+                            >Province / State
+                            <span style="font-weight: 400; color: #999"
+                                >(optional)</span
+                            ></label
+                        >
+                        <input
+                            type="text"
+                            id="shipProvince"
+                            placeholder="NSW"
+                        />
+                    </div>
+                    <div class="input-group">
+                        <label>ZIP / Postal Code</label>
+                        <input type="text" id="shipZip" placeholder="2000" />
+                    </div>
+                    <div class="input-group">
+                        <label>Country Code</label>
+                        <input
+                            type="text"
+                            id="shipCountryCode"
+                            placeholder="AU"
+                            style="text-transform: uppercase"
+                            maxlength="2"
+                        />
+                    </div>
+                    <div class="input-group" style="grid-column: span 2">
+                        <label
+                            >Product Handles
+                            <span style="font-weight: 400; color: #999"
+                                >(one per line)</span
+                            ></label
+                        >
+                        <textarea
+                            id="shipHandles"
+                            rows="5"
+                            placeholder="my-product-handle&#10;another-product&#10;third-product"
+                            style="
+                                padding: 10px;
+                                border: 1px solid #ddd;
+                                border-radius: 6px;
+                                font-size: 14px;
+                                font-family: Consolas, monospace;
+                                resize: vertical;
+                            "
+                        ></textarea>
+                    </div>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 20px">
+                    <button
+                        onclick="calculateShipping()"
+                        id="shippingBtn"
+                        style="min-width: 200px"
+                    >
+                        CALCULATE SHIPPING
+                    </button>
+                </div>
+
+                <div
+                    id="shippingLoading"
+                    style="
+                        display: none;
+                        text-align: center;
+                        padding: 20px;
+                        color: #666;
+                    "
+                >
+                    <div
+                        id="shippingProgressMsg"
+                        style="
+                            margin-bottom: 8px;
+                            font-family: Consolas, monospace;
+                            font-size: 0.85em;
+                        "
+                    >
+                        Starting...
+                    </div>
+                    <div
+                        style="
+                            display: inline-block;
+                            width: 200px;
+                            height: 6px;
+                            background: #eee;
+                            border-radius: 3px;
+                            overflow: hidden;
+                        "
+                    >
+                        <div
+                            id="shippingLoadingBar"
+                            style="
+                                height: 100%;
+                                width: 40%;
+                                background: #008060;
+                                border-radius: 3px;
+                                animation: shimmer 1.2s infinite;
+                            "
+                        ></div>
+                    </div>
+                </div>
+
+                <div id="shippingResultsArea" style="display: none">
+                    <h3>Shipping Rates</h3>
+                    <div
+                        style="
+                            overflow-x: auto;
+                            border: 1px solid #eee;
+                            border-radius: 8px;
+                        "
+                    >
+                        <table
+                            id="shippingTable"
+                            class="log-table"
+                            style="min-width: 600px"
+                        ></table>
+                    </div>
+                </div>
+            </div>
+            <!-- End tab-shipping -->
         </div>
 
         <script src="renderer.js"></script>

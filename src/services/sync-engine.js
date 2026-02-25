@@ -30,9 +30,16 @@ class SyncEngine {
         let allProducts = [];
         let hasNext = true;
         let cursor = null;
-        let lastSync = this.config.initialSync
-            ? null
-            : this.manifest.getLastSync();
+        let lastSync =
+            this.config.initialSync || this.config.forceFullSync
+                ? null
+                : this.manifest.getLastSync();
+
+        if (this.config.forceFullSync) {
+            console.log(
+                "Force Full Sync enabled: Ignoring last sync timestamp.",
+            );
+        }
 
         onProgress({ message: "Fetching Products...", percent: 10 });
 
@@ -40,7 +47,7 @@ class SyncEngine {
             const data = await this.shopify.fetchProducts(
                 lastSync,
                 cursor,
-                this.config.metafieldKeys
+                this.config.metafieldKeys,
             );
             const edges = data.products.edges;
             allProducts = allProducts.concat(edges.map((e) => e.node));
@@ -65,7 +72,7 @@ class SyncEngine {
         if (this.config.metafieldKeys) {
             console.log(
                 "Configuring Metafields with keys:",
-                this.config.metafieldKeys
+                this.config.metafieldKeys,
             );
             this.config.metafieldKeys.split(",").forEach((k, i) => {
                 const standardized = k.trim().toLowerCase();
@@ -187,7 +194,7 @@ class SyncEngine {
                     type = "image";
                 } else if (m.mediaContentType === "VIDEO") {
                     const src = m.sources.find(
-                        (s) => s.mimeType === "video/mp4"
+                        (s) => s.mimeType === "video/mp4",
                     );
                     url = src ? src.url : null;
                     type = "video";
@@ -197,18 +204,18 @@ class SyncEngine {
                     // Skip main media explicitly if filename ends with _pri (before extension)
                     const cleanUrlForCheck = url.split("?")[0];
                     const filenameForCheck = path.basename(
-                        decodeURIComponent(cleanUrlForCheck)
+                        decodeURIComponent(cleanUrlForCheck),
                     );
                     const extForCheck = path.extname(filenameForCheck);
                     const nameWithoutExt = path.basename(
                         filenameForCheck,
-                        extForCheck
+                        extForCheck,
                     );
 
-                    if (nameWithoutExt.endsWith("_pri")) {
-                        // console.log(`[Diff] Skipping _pri image: ${filenameForCheck}`);
-                        return;
-                    }
+                    // if (nameWithoutExt.endsWith("_pri")) {
+                    //     // console.log(`[Diff] Skipping _pri image: ${filenameForCheck}`);
+                    //     return;
+                    // }
 
                     targets.push({
                         id: m.id,
@@ -237,14 +244,14 @@ class SyncEngine {
                     const rawName = path.basename(t.url.split("?")[0]);
                     const rawNameNoExt = path.parse(rawName).name;
 
-                    if (rawNameNoExt.endsWith("_pri")) {
-                        return; // Skip
-                    }
+                    // if (rawNameNoExt.endsWith("_pri")) {
+                    //     return; // Skip
+                    // }
 
                     mainCounter++;
                     const prefix = `main-${String(mainCounter).padStart(
                         2,
-                        "0"
+                        "0",
                     )}-`;
                     const filename = getSpecialFilename(t.url, prefix);
                     finalMediaList.push({ ...t, filename, position: 1 });
@@ -265,7 +272,7 @@ class SyncEngine {
                     extraCounter++;
                     const prefix = `extra-${String(extraCounter).padStart(
                         2,
-                        "0"
+                        "0",
                     )}-`;
                     const filename = getSpecialFilename(t.url, prefix);
                     finalMediaList.push({ ...t, filename, position: 1 });
@@ -379,7 +386,7 @@ class SyncEngine {
                         if (!this.config.dryRun) {
                             const fileToDelete = path.join(
                                 destFolder,
-                                val.filename
+                                val.filename,
                             );
                             try {
                                 if (await fs.pathExists(fileToDelete)) {
@@ -388,7 +395,7 @@ class SyncEngine {
                             } catch (err) {
                                 console.error(
                                     `Failed to delete ${fileToDelete}`,
-                                    err
+                                    err,
                                 );
                             }
                         }
@@ -430,7 +437,7 @@ class SyncEngine {
             if (remoteProd.tags) {
                 // Find first tag that matches our target list
                 const foundTag = remoteProd.tags.find((t) =>
-                    targetTags.includes(t)
+                    targetTags.includes(t),
                 );
                 if (foundTag) category = foundTag;
             }
@@ -456,7 +463,7 @@ class SyncEngine {
             if (
                 productActionOccurred ||
                 this.changes.some(
-                    (c) => c.product === handle && c.type === "DELETED_ASSET"
+                    (c) => c.product === handle && c.type === "DELETED_ASSET",
                 )
             ) {
                 this.detailedResults.push({
@@ -487,7 +494,7 @@ class SyncEngine {
                             message: `Downloading (${completed}/${total})`,
                             percent: pct,
                         });
-                    }
+                    },
                 );
             }
         }
@@ -517,7 +524,7 @@ class SyncEngine {
 
         const reportPath = path.join(
             this.config.downloadPath,
-            `sync_report_${Date.now()}.csv`
+            `sync_report_${Date.now()}.csv`,
         );
         const csvWriter = createObjectCsvWriter({
             path: reportPath,

@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const SyncEngine = require("./services/sync-engine");
 const ManifestManager = require("./utils/manifest-manager");
+const ShippingCalculator = require("./services/shipping-calculator");
 
 // Fix for Windows Cache/GPU errors which can cause blank rendering
 app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
@@ -40,10 +41,10 @@ function scanDirectoryForProducts(basePath) {
             (dirent) =>
                 dirent.isDirectory() &&
                 !ignoredFolders.includes(dirent.name) &&
-                !dirent.name.startsWith(".")
+                !dirent.name.startsWith("."),
         );
         console.log(
-            `[Scan] Found ${productFolders.length} candidate product folders.`
+            `[Scan] Found ${productFolders.length} candidate product folders.`,
         );
 
         // Map folders to product objects, only if they contain media
@@ -55,18 +56,18 @@ function scanDirectoryForProducts(basePath) {
                     files = fs
                         .readdirSync(productPath)
                         .filter((file) =>
-                            /\.(jpg|jpeg|png|gif|mp4|mov|webp)$/i.test(file)
+                            /\.(jpg|jpeg|png|gif|mp4|mov|webp)$/i.test(file),
                         );
                 } catch (err) {
                     console.log(
-                        `[Scan] Error accessing ${folder.name}: ${err.message}`
+                        `[Scan] Error accessing ${folder.name}: ${err.message}`,
                     );
                     return null;
                 }
 
                 if (files.length === 0) {
                     console.log(
-                        `[Scan] Folder ${folder.name} has no media files. Skipping.`
+                        `[Scan] Folder ${folder.name} has no media files. Skipping.`,
                     );
                     return null;
                 }
@@ -136,7 +137,7 @@ ipcMain.handle("load-library", async (event, folderPath) => {
     // 1. Scan Physical Directory (Single Truth)
     const physicalProducts = scanDirectoryForProducts(folderPath);
     console.log(
-        `[IPC] Physical Scan found ${physicalProducts.length} products`
+        `[IPC] Physical Scan found ${physicalProducts.length} products`,
     );
 
     // 2. Load Manifest for Metadata Overlay (Optional)
@@ -155,7 +156,7 @@ ipcMain.handle("load-library", async (event, folderPath) => {
 
             p.media = p.media.map((m) => {
                 const knownFile = tracked.media.find(
-                    (tm) => tm.filename === m.filename
+                    (tm) => tm.filename === m.filename,
                 );
                 // Use persisted 'lastStatus' if available, otherwise 'unchanged'
                 const manifestStatus = knownFile
@@ -213,3 +214,116 @@ ipcMain.handle("start-sync", async (event, config) => {
         throw error;
     }
 });
+
+ipcMain.handle("cleanup-unused-images", async (event, folderPath) => {
+    console.log(`[Cleanup] Starting cleanup in: ${folderPath}`);
+    if (!folderPath) return { scanned: 0, deleted: 0 };
+
+    // Validate path exists
+    if (!fs.existsSync(folderPath)) {
+        throw new Error("Folder path does not exist");
+    }
+
+    const manifest = new ManifestManager(folderPath);
+    await manifest.load();
+    const manifestProducts = manifest.getAllProducts(); // object: handle -> productData
+
+    let scannedCount = 0;
+    let deletedCount = 0;
+
+    const ignoredFolders = [
+        ".git",
+        "node_modules",
+        "src",
+        "utils",
+        "services",
+        "ui",
+        ".vscode",
+        "dist",
+        "build",
+        ".manifest_history",
+    ];
+
+    let entries;
+    try {
+        entries = fs.readdirSync(folderPath, { withFileTypes: true });
+    } catch (e) {
+        throw new Error(`Failed to read directory: ${e.message}`);
+    }
+
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith(".")) continue;
+        if (ignoredFolders.includes(entry.name)) continue;
+
+        const productHandle = entry.name;
+        const productPath = path.join(folderPath, productHandle);
+
+        const manifestProduct = manifestProducts[productHandle];
+        // If undefined, validFilenames is empty -> delete all media in this folder
+        const validFilenames =
+            manifestProduct && manifestProduct.media
+                ? new Set(manifestProduct.media.map((m) => m.filename))
+                : new Set();
+
+        let productFiles;
+        try {
+            productFiles = fs.readdirSync(productPath);
+        } catch (e) {
+            console.error(
+                `[Cleanup] Skipping inaccessible folder: ${productHandle}`,
+            );
+            continue;
+        }
+
+        for (const file of productFiles) {
+            // Only target media files
+            if (/\.(jpg|jpeg|png|gif|mp4|mov|webp)$/i.test(file)) {
+                scannedCount++;
+                if (!validFilenames.has(file)) {
+                    const filePath = path.join(productPath, file);
+                    try {
+                        fs.unlinkSync(filePath);
+                        console.log(
+                            `[Cleanup] Deleted: ${file} (Product: ${productHandle})`,
+                        );
+                        deletedCount++;
+                    } catch (err) {
+                        console.error(
+                            `[Cleanup] Failed to delete ${file}:`,
+                            err,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    return { scanned: scannedCount, deleted: deletedCount };
+});
+
+ipcMain.handle(
+    "calculate-shipping",
+    async (event, { shopUrl, apiKey, handles, address }) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!handles || handles.length === 0)
+            throw new Error("No product handles provided");
+        if (
+            !address ||
+            !address.address1 ||
+            !address.city ||
+            !address.zip ||
+            !address.countryCode
+        ) {
+            throw new Error(
+                "Address is incomplete (address1, city, zip, countryCode required)",
+            );
+        }
+
+        const calculator = new ShippingCalculator(shopUrl, apiKey);
+        return calculator.calculate(handles, address, (progressEvent) => {
+            mainWindow.webContents.send("shipping-progress", progressEvent);
+        });
+    },
+);
