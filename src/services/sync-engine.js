@@ -93,7 +93,11 @@ class SyncEngine {
         for (const remoteProd of allProducts) {
             processedHandles.add(remoteProd.handle);
             const handle = remoteProd.handle;
-            const destFolder = path.join(this.config.downloadPath, handle);
+            const firstSku = remoteProd.variants?.edges?.[0]?.node?.sku;
+            const folderName = (
+                firstSku ? `${handle}-${firstSku}` : handle
+            ).toLowerCase();
+            const destFolder = path.join(this.config.downloadPath, folderName);
 
             const localProd = this.manifest.getProduct(handle);
             const localMediaMap = this.manifest.getMediaMap(handle);
