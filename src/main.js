@@ -5,6 +5,17 @@ const SyncEngine = require("./services/sync-engine");
 const ManifestManager = require("./utils/manifest-manager");
 const ShippingCalculator = require("./services/shipping-calculator");
 
+// Auto-reload the app on source changes during local development.
+if (!app.isPackaged) {
+    try {
+        require("electron-reloader")(module, {
+            watchRenderer: true,
+        });
+    } catch (err) {
+        console.warn("electron-reloader unavailable:", err.message);
+    }
+}
+
 // Fix for Windows Cache/GPU errors which can cause blank rendering
 app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
 app.commandLine.appendSwitch("no-sandbox");
@@ -304,11 +315,9 @@ ipcMain.handle("cleanup-unused-images", async (event, folderPath) => {
 
 ipcMain.handle(
     "calculate-shipping",
-    async (event, { shopUrl, apiKey, handles, address }) => {
+    async (event, { shopUrl, apiKey, handles, variantIds, address }) => {
         if (!shopUrl || !apiKey)
             throw new Error("Missing Shop URL or API Token");
-        if (!handles || handles.length === 0)
-            throw new Error("No product handles provided");
         if (
             !address ||
             !address.address1 ||
@@ -322,8 +331,20 @@ ipcMain.handle(
         }
 
         const calculator = new ShippingCalculator(shopUrl, apiKey);
-        return calculator.calculate(handles, address, (progressEvent) => {
+        const progress = (progressEvent) => {
             mainWindow.webContents.send("shipping-progress", progressEvent);
-        });
+        };
+
+        const hasVariantIds = variantIds && variantIds.length > 0;
+        const hasHandles = handles && handles.length > 0;
+
+        if (!hasVariantIds && !hasHandles)
+            throw new Error("Provide either product handles or variant IDs.");
+
+        if (hasVariantIds) {
+            return calculator.calculateFromVariantIds(variantIds, address, progress);
+        } else {
+            return calculator.calculate(handles, address, progress);
+        }
     },
 );

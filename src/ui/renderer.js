@@ -1,6 +1,9 @@
 const { ipcRenderer } = require("electron");
 const path = require("path"); // Load path module at top level
 
+// Media type filter state
+let activeMediaType = localStorage.getItem("activeMediaType") || "all";
+
 let selectedPath = localStorage.getItem("lastPath") || "";
 document.getElementById("pathDisplay").value = selectedPath;
 document.getElementById("shopUrl").value =
@@ -8,6 +11,82 @@ document.getElementById("shopUrl").value =
 document.getElementById("apiKey").value = localStorage.getItem("lastKey") || "";
 document.getElementById("metafields").value =
     localStorage.getItem("lastMetafields") || "";
+
+// Restore shipping calculator inputs
+document.getElementById("shipHandles").value =
+    localStorage.getItem("shipHandles") || "";
+document.getElementById("shipVariantIds").value =
+    localStorage.getItem("shipVariantIds") || "";
+
+// Restore 5 address rows — migrate legacy single-address keys if needed
+(function restoreAddresses() {
+    const saved = JSON.parse(localStorage.getItem("shipAddresses") || "null");
+    if (saved) {
+        saved.forEach((addr, i) => {
+            const chk = document.getElementById(`addrCheck${i}`);
+            if (chk) chk.checked = addr.checked !== false;
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ""; };
+            set(`addrAddress1_${i}`, addr.address1);
+            set(`addrCity_${i}`, addr.city);
+            set(`addrProvince_${i}`, addr.province);
+            set(`addrZip_${i}`, addr.zip);
+            set(`addrCountry_${i}`, addr.countryCode);
+        });
+    } else {
+        // Migrate old single-address keys to row 0
+        const old1 = localStorage.getItem("shipAddress1");
+        if (old1) {
+            document.getElementById("addrAddress1_0").value = old1;
+            document.getElementById("addrCity_0").value = localStorage.getItem("shipCity") || "";
+            document.getElementById("addrProvince_0").value = localStorage.getItem("shipProvince") || "";
+            document.getElementById("addrZip_0").value = localStorage.getItem("shipZip") || "";
+            document.getElementById("addrCountry_0").value = localStorage.getItem("shipCountryCode") || "";
+        }
+    }
+})();
+
+function toggleAllAddresses() {
+    const checks = [0, 1, 2, 3, 4].map((i) => document.getElementById(`addrCheck${i}`));
+    const allChecked = checks.every((c) => c && c.checked);
+    checks.forEach((c) => { if (c) c.checked = !allChecked; });
+    document.getElementById("selectAllAddressesBtn").textContent =
+        allChecked ? "Select All" : "Deselect All";
+}
+
+// Restore input mode toggle
+const _savedInputMode = localStorage.getItem("shipInputMode") || "handles";
+setShippingInputMode(_savedInputMode);
+
+function setShippingInputMode(mode) {
+    const handlesArea = document.getElementById("shipHandles");
+    const variantsArea = document.getElementById("shipVariantIds");
+    const hint = document.getElementById("shipVariantIdsHint");
+    const handlesBtn = document.getElementById("inputModeHandlesBtn");
+    const variantsBtn = document.getElementById("inputModeVariantsBtn");
+
+    if (mode === "variants") {
+        handlesArea.style.display = "none";
+        variantsArea.style.display = "block";
+        hint.style.display = "block";
+        handlesBtn.style.background = "#f1f2f3";
+        handlesBtn.style.color = "#333";
+        handlesBtn.style.borderColor = "#ccc";
+        variantsBtn.style.background = "#008060";
+        variantsBtn.style.color = "white";
+        variantsBtn.style.borderColor = "#008060";
+    } else {
+        handlesArea.style.display = "block";
+        variantsArea.style.display = "none";
+        hint.style.display = "none";
+        handlesBtn.style.background = "#008060";
+        handlesBtn.style.color = "white";
+        handlesBtn.style.borderColor = "#008060";
+        variantsBtn.style.background = "#f1f2f3";
+        variantsBtn.style.color = "#333";
+        variantsBtn.style.borderColor = "#ccc";
+    }
+    localStorage.setItem("shipInputMode", mode);
+}
 
 async function selectFolder() {
     selectedPath = await ipcRenderer.invoke("select-folder");
@@ -67,6 +146,7 @@ function switchTab(tabName) {
             // Slight delay to ensure DOM is painted
             setTimeout(() => {
                 console.log("Triggering loadLocalLibrary from switchTab");
+                initMediaTypeButtons(); // Initialize button states
                 loadLocalLibrary(true);
             }, 50);
         }
@@ -78,7 +158,10 @@ function switchTab(tabName) {
 
 let cachedLibrary = [];
 
-async function loadLocalLibrary(renderToLibraryTab = false) {
+async function loadLocalLibrary(
+    renderToLibraryTab = false,
+    cleanupBeforeScan = false,
+) {
     console.log("Loading Local Library from:", selectedPath);
     if (!selectedPath) {
         if (renderToLibraryTab) {
@@ -89,6 +172,25 @@ async function loadLocalLibrary(renderToLibraryTab = false) {
     }
 
     try {
+        if (cleanupBeforeScan) {
+            const cleanupResult = await ipcRenderer.invoke(
+                "cleanup-unused-images",
+                selectedPath,
+            );
+
+            if (renderToLibraryTab) {
+                const removed = cleanupResult?.deleted || 0;
+                const scanned = cleanupResult?.scanned || 0;
+                const statusText =
+                    removed > 0
+                        ? `Rescan cleanup removed ${removed} unused file(s) from ${scanned} scanned.`
+                        : `Rescan cleanup complete. No unused files found across ${scanned} scanned file(s).`;
+
+                document.getElementById("fullLibraryArea").innerHTML =
+                    `<div style="padding:12px; margin-bottom:12px; background:#e8f5e9; color:#1b5e20; border:1px solid #c8e6c9; border-radius:6px;">${statusText}</div>`;
+            }
+        }
+
         const products = await ipcRenderer.invoke("load-library", selectedPath);
         console.log("Loaded products:", products ? products.length : "null");
         cachedLibrary = products || [];
@@ -103,6 +205,10 @@ async function loadLocalLibrary(renderToLibraryTab = false) {
                 `<div style="color:red; padding:20px;">Error loading library: ${e.message}</div>`;
         }
     }
+}
+
+async function rescanLibrary() {
+    await loadLocalLibrary(true, true);
 }
 
 async function cleanupLibrary() {
@@ -186,6 +292,71 @@ function filterLibrary() {
     });
 
     renderGallery(filtered, "fullLibraryArea");
+}
+
+function toggleMediaType(type) {
+    activeMediaType = type;
+    localStorage.setItem("activeMediaType", type);
+
+    // Update button styles
+    const buttons = {
+        all: document.getElementById("mediaTypeAll"),
+        main: document.getElementById("mediaTypeMain"),
+        banner: document.getElementById("mediaTypeBanner"),
+        extra: document.getElementById("mediaTypeExtra"),
+    };
+
+    // Reset all buttons to inactive state
+    Object.values(buttons).forEach((btn) => {
+        if (btn) {
+            btn.style.background = "#f1f2f3";
+            btn.style.color = "#333";
+            btn.style.borderColor = "#ccc";
+        }
+    });
+
+    // Set active button style
+    if (buttons[type]) {
+        buttons[type].style.background = "#008060";
+        buttons[type].style.color = "white";
+        buttons[type].style.borderColor = "#008060";
+    }
+
+    // Re-render the gallery with the new filter
+    filterLibrary();
+}
+
+// Initialize media type button states on page load
+function initMediaTypeButtons() {
+    const buttons = {
+        all: document.getElementById("mediaTypeAll"),
+        main: document.getElementById("mediaTypeMain"),
+        banner: document.getElementById("mediaTypeBanner"),
+        extra: document.getElementById("mediaTypeExtra"),
+    };
+
+    // Reset all buttons
+    Object.values(buttons).forEach((btn) => {
+        if (btn) {
+            btn.style.background = "#f1f2f3";
+            btn.style.color = "#333";
+            btn.style.borderColor = "#ccc";
+        }
+    });
+
+    // Set active button based on saved state
+    if (buttons[activeMediaType]) {
+        buttons[activeMediaType].style.background = "#008060";
+        buttons[activeMediaType].style.color = "white";
+        buttons[activeMediaType].style.borderColor = "#008060";
+    }
+}
+
+// Call initialization after DOM is loaded
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initMediaTypeButtons);
+} else {
+    initMediaTypeButtons();
 }
 
 ipcRenderer.on("sync-progress", (event, data) => {
@@ -486,10 +657,19 @@ function renderGallery(products, containerId, showAll = false) {
                 };
 
                 // Order: Main, Banner, Extra, Other
-                renderSection("Main Images", groups.main);
-                renderSection("Banners", groups.banner);
-                renderSection("Extras", groups.extra);
-                renderSection("Other", groups.other);
+                // Filter based on activeMediaType
+                if (activeMediaType === "all") {
+                    renderSection("Main Images", groups.main);
+                    renderSection("Banners", groups.banner);
+                    renderSection("Extras", groups.extra);
+                    renderSection("Other", groups.other);
+                } else if (activeMediaType === "main") {
+                    renderSection("Main Images", groups.main);
+                } else if (activeMediaType === "banner") {
+                    renderSection("Banners", groups.banner);
+                } else if (activeMediaType === "extra") {
+                    renderSection("Extras", groups.extra);
+                }
 
                 // grid is populated by renderSection (which appends to mainWrapper which is grid)
             } else {
@@ -535,41 +715,57 @@ let _shippingCarriers = [];
 let _shippingHasVariants = false;
 
 async function calculateShipping() {
-    const address1 = document.getElementById("shipAddress1").value.trim();
-    const city = document.getElementById("shipCity").value.trim();
-    const province = document.getElementById("shipProvince").value.trim();
-    const zip = document.getElementById("shipZip").value.trim();
-    const countryCode = document
-        .getElementById("shipCountryCode")
-        .value.trim()
-        .toUpperCase();
+    const inputMode = localStorage.getItem("shipInputMode") || "handles";
     const handlesRaw = document.getElementById("shipHandles").value;
+    const variantIdsRaw = document.getElementById("shipVariantIds").value;
 
-    if (!address1 || !city || !zip || !countryCode) {
-        return alert(
-            "Please fill in Address Line 1, City, ZIP, and Country Code.",
-        );
+    // Collect checked addresses
+    const addresses = [];
+    for (let i = 0; i < 5; i++) {
+        const chk = document.getElementById(`addrCheck${i}`);
+        if (!chk || !chk.checked) continue;
+        const address1 = document.getElementById(`addrAddress1_${i}`).value.trim();
+        const city = document.getElementById(`addrCity_${i}`).value.trim();
+        const province = document.getElementById(`addrProvince_${i}`).value.trim();
+        const zip = document.getElementById(`addrZip_${i}`).value.trim();
+        const countryCode = document.getElementById(`addrCountry_${i}`).value.trim().toUpperCase();
+        if (!address1 || !city || !zip || !countryCode) {
+            return alert(`Address ${i + 1} is incomplete. Fill in Address Line 1, City, ZIP, and Country Code.`);
+        }
+        addresses.push({ address1, city, province, zip, countryCode });
     }
 
-    const handles = handlesRaw
-        .split("\n")
-        .map((h) => h.trim())
-        .filter((h) => h.length > 0);
+    if (addresses.length === 0) {
+        return alert("Please check and fill at least one address.");
+    }
 
-    if (handles.length === 0) {
+    // Persist addresses
+    const addressData = Array.from({ length: 5 }, (_, i) => ({
+        checked: document.getElementById(`addrCheck${i}`)?.checked || false,
+        address1: document.getElementById(`addrAddress1_${i}`)?.value || "",
+        city: document.getElementById(`addrCity_${i}`)?.value || "",
+        province: document.getElementById(`addrProvince_${i}`)?.value || "",
+        zip: document.getElementById(`addrZip_${i}`)?.value || "",
+        countryCode: document.getElementById(`addrCountry_${i}`)?.value || "",
+    }));
+    localStorage.setItem("shipAddresses", JSON.stringify(addressData));
+    localStorage.setItem("shipHandles", handlesRaw);
+    localStorage.setItem("shipVariantIds", variantIdsRaw);
+
+    const handles = handlesRaw.split("\n").map((h) => h.trim()).filter((h) => h.length > 0);
+    const variantIds = variantIdsRaw.split("\n").map((v) => v.trim()).filter((v) => v.length > 0);
+
+    if (inputMode === "variants" && variantIds.length === 0)
+        return alert("Please enter at least one variant ID.");
+    if (inputMode !== "variants" && handles.length === 0)
         return alert("Please enter at least one product handle.");
-    }
 
     const shopUrl = document.getElementById("shopUrl").value.trim();
     const apiKey = document.getElementById("apiKey").value.trim();
+    if (!shopUrl || !apiKey)
+        return alert("Please fill in Shop URL and API Token on the Sync Dashboard tab first.");
 
-    if (!shopUrl || !apiKey) {
-        return alert(
-            "Please fill in Shop URL and API Token on the Sync Dashboard tab first.",
-        );
-    }
-
-    // Reset progressive state
+    // Reset
     _shippingRows = [];
     _shippingCarriers = [];
     _shippingHasVariants = false;
@@ -577,26 +773,30 @@ async function calculateShipping() {
     const btn = document.getElementById("shippingBtn");
     btn.disabled = true;
     btn.innerText = "CALCULATING...";
+    const copyBtn = document.getElementById("copyTableBtn");
+    if (copyBtn) copyBtn.style.display = "none";
 
     document.getElementById("shippingLoading").style.display = "block";
     document.getElementById("shippingErrorArea").style.display = "none";
-
-    // Show table immediately (empty) so rows appear as they arrive
     document.getElementById("shippingResultsArea").style.display = "block";
     renderShippingTable({ rows: [], carriers: [], hasVariants: false });
 
+    const itemCount = inputMode === "variants" ? variantIds.length : handles.length;
     const progressMsg = document.getElementById("shippingProgressMsg");
-    if (progressMsg)
-        progressMsg.textContent = `Starting — 0 / ${handles.length} products`;
 
     try {
-        await ipcRenderer.invoke("calculate-shipping", {
-            shopUrl,
-            apiKey,
-            handles,
-            address: { address1, city, province, zip, countryCode },
-        });
-        // Table is fully built by shipping-progress events; nothing more to do here.
+        for (let ai = 0; ai < addresses.length; ai++) {
+            const addr = addresses[ai];
+            if (progressMsg)
+                progressMsg.textContent = `[${addr.city} — address ${ai + 1}/${addresses.length}] Starting — 0 / ${itemCount}`;
+            await ipcRenderer.invoke("calculate-shipping", {
+                shopUrl,
+                apiKey,
+                handles: inputMode !== "variants" ? handles : [],
+                variantIds: inputMode === "variants" ? variantIds : [],
+                address: addr,
+            });
+        }
     } catch (err) {
         console.error("Shipping Calculation Error:", err);
         const errDiv = document.getElementById("shippingErrorArea");
@@ -608,7 +808,25 @@ async function calculateShipping() {
         btn.innerText = "CALCULATE SHIPPING";
         document.getElementById("shippingLoading").style.display = "none";
         if (progressMsg) progressMsg.textContent = "";
+        if (_shippingRows.length > 0 && copyBtn) copyBtn.style.display = "inline-block";
     }
+}
+
+function copyShippingTable() {
+    const table = document.getElementById("shippingTable");
+    const tsv = Array.from(table.querySelectorAll("tr"))
+        .map((tr) =>
+            Array.from(tr.querySelectorAll("th, td"))
+                .map((cell) => cell.textContent.trim())
+                .join("\t"),
+        )
+        .join("\n");
+    navigator.clipboard.writeText(tsv).then(() => {
+        const btn = document.getElementById("copyTableBtn");
+        const orig = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+    });
 }
 
 function renderShippingTable(result) {
@@ -620,18 +838,16 @@ function renderShippingTable(result) {
     const fixedCols = hasVariants
         ? ["Handle", "Product Title", "Variant", "SKU", "Weight"]
         : ["Handle", "Product Title", "SKU", "Weight"];
-    const allCols = [...fixedCols, ...carriers];
+    const allCols = [...fixedCols, ...carriers, "City"];
 
     // Header row
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
-
     allCols.forEach((col) => {
         const th = document.createElement("th");
         th.textContent = col;
         headerRow.appendChild(th);
     });
-
     thead.appendChild(headerRow);
     table.appendChild(thead);
 
@@ -648,6 +864,7 @@ function renderShippingTable(result) {
         tr.appendChild(td);
         tbody.appendChild(tr);
     } else {
+        let lastCity = null;
         rows.forEach((row) => {
             const tr = document.createElement("tr");
 
@@ -663,7 +880,7 @@ function renderShippingTable(result) {
                 tr.appendChild(titleTd);
 
                 const errorTd = document.createElement("td");
-                errorTd.colSpan = allCols.length - 1;
+                errorTd.colSpan = allCols.length - 2; // -2 for Handle + City
                 errorTd.style.color = "#b71c1c";
                 errorTd.style.fontStyle = "italic";
                 errorTd.textContent = row.error;
@@ -708,6 +925,15 @@ function renderShippingTable(result) {
                 });
             }
 
+            // City — last column
+            const cityTd = document.createElement("td");
+            cityTd.textContent = row.addressCity || "";
+            cityTd.style.fontWeight = "600";
+            cityTd.style.color = row.addressCity !== lastCity ? "#008060" : "#bbb";
+            cityTd.style.whiteSpace = "nowrap";
+            if (row.addressCity !== lastCity) lastCity = row.addressCity;
+            tr.appendChild(cityTd);
+
             tbody.appendChild(tr);
         });
     }
@@ -719,7 +945,9 @@ function renderShippingTable(result) {
 ipcRenderer.on("shipping-progress", (event, data) => {
     const progressMsg = document.getElementById("shippingProgressMsg");
 
-    if (data.type === "lookup") {
+    if (data.type === "catalog") {
+        if (progressMsg) progressMsg.textContent = data.message;
+    } else if (data.type === "lookup") {
         if (progressMsg)
             progressMsg.textContent = `[${data.current}/${data.total}] Looking up: ${data.handle}`;
     } else if (data.type === "calculating") {

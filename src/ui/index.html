@@ -533,7 +533,7 @@
                     "
                 >
                     <button
-                        onclick="loadLocalLibrary(true)"
+                        onclick="rescanLibrary()"
                         style="
                             padding: 8px 16px;
                             background: #f1f2f3;
@@ -541,8 +541,79 @@
                             border: 1px solid #ccc;
                         "
                     >
-                        Refresh Library
+                        Rescan Library
                     </button>
+                    
+                    <!-- Media Type Filter Toggle -->
+                    <div style="display: flex; gap: 8px; align-items: center; background: #f8f9fa; padding: 6px 12px; border-radius: 6px; border: 1px solid #dee2e6;">
+                        <span style="font-size: 0.85em; font-weight: 600; color: #666; margin-right: 4px;">Show:</span>
+                        <button
+                            id="mediaTypeAll"
+                            onclick="toggleMediaType('all')"
+                            style="
+                                padding: 6px 12px;
+                                background: #008060;
+                                color: white;
+                                border: 1px solid #008060;
+                                border-radius: 4px;
+                                font-size: 0.85em;
+                                cursor: pointer;
+                                font-weight: 600;
+                                transition: all 0.2s;
+                            "
+                        >
+                            All Images
+                        </button>
+                        <button
+                            id="mediaTypeMain"
+                            onclick="toggleMediaType('main')"
+                            style="
+                                padding: 6px 12px;
+                                background: #f1f2f3;
+                                color: #333;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                                font-size: 0.85em;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                            "
+                        >
+                            Main Images
+                        </button>
+                        <button
+                            id="mediaTypeBanner"
+                            onclick="toggleMediaType('banner')"
+                            style="
+                                padding: 6px 12px;
+                                background: #f1f2f3;
+                                color: #333;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                                font-size: 0.85em;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                            "
+                        >
+                            Banners
+                        </button>
+                        <button
+                            id="mediaTypeExtra"
+                            onclick="toggleMediaType('extra')"
+                            style="
+                                padding: 6px 12px;
+                                background: #f1f2f3;
+                                color: #333;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                                font-size: 0.85em;
+                                cursor: pointer;
+                                transition: all 0.2s;
+                            "
+                        >
+                            Extras
+                        </button>
+                    </div>
+
                     <div style="display: flex; gap: 10px; align-items: center">
                         <select
                             id="categoryFilter"
@@ -662,67 +733,100 @@
                     </button>
                 </div>
 
-                <div class="config-box">
-                    <div class="input-group">
-                        <label>Address Line 1</label>
-                        <input
-                            type="text"
-                            id="shipAddress1"
-                            placeholder="123 Main St"
-                        />
+                <!-- Address table -->
+                <div style="margin-bottom:20px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                        <span style="font-size:0.85em; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.05em;">Shipping Addresses</span>
+                        <button onclick="toggleAllAddresses()" id="selectAllAddressesBtn" style="padding:4px 12px; font-size:12px; font-weight:600; background:#f1f2f3; color:#333; border:1px solid #ccc; border-radius:4px; cursor:pointer;">Select All</button>
                     </div>
-                    <div class="input-group">
-                        <label>City</label>
-                        <input type="text" id="shipCity" placeholder="Sydney" />
+                    <div style="overflow-x:auto; border:1px solid #eee; border-radius:8px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                            <thead>
+                                <tr style="background:#fafafa; border-bottom:1px solid #eee;">
+                                    <th style="padding:6px 10px; width:36px;"></th>
+                                    <th style="padding:6px 10px; text-align:left; font-weight:600; color:#555; white-space:nowrap;">Address Line 1</th>
+                                    <th style="padding:6px 10px; text-align:left; font-weight:600; color:#555;">City</th>
+                                    <th style="padding:6px 10px; text-align:left; font-weight:600; color:#555; white-space:nowrap;">Province <span style="font-weight:400;color:#aaa;">(opt)</span></th>
+                                    <th style="padding:6px 10px; text-align:left; font-weight:600; color:#555;">ZIP</th>
+                                    <th style="padding:6px 10px; text-align:left; font-weight:600; color:#555;">Country</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr style="border-bottom:1px solid #f5f5f5;">
+                                    <td style="padding:5px 10px; text-align:center;"><input type="checkbox" id="addrCheck0" checked /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrAddress1_0" placeholder="123 Main St" style="width:100%;min-width:140px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCity_0" placeholder="Sydney" style="width:100%;min-width:100px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrProvince_0" placeholder="NSW" style="width:100%;min-width:60px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrZip_0" placeholder="2000" style="width:80px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCountry_0" placeholder="AU" maxlength="2" style="width:50px;text-transform:uppercase;box-sizing:border-box;" /></td>
+                                </tr>
+                                <tr style="border-bottom:1px solid #f5f5f5;">
+                                    <td style="padding:5px 10px; text-align:center;"><input type="checkbox" id="addrCheck1" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrAddress1_1" placeholder="123 Main St" style="width:100%;min-width:140px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCity_1" placeholder="Melbourne" style="width:100%;min-width:100px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrProvince_1" placeholder="VIC" style="width:100%;min-width:60px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrZip_1" placeholder="3000" style="width:80px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCountry_1" placeholder="AU" maxlength="2" style="width:50px;text-transform:uppercase;box-sizing:border-box;" /></td>
+                                </tr>
+                                <tr style="border-bottom:1px solid #f5f5f5;">
+                                    <td style="padding:5px 10px; text-align:center;"><input type="checkbox" id="addrCheck2" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrAddress1_2" placeholder="123 Main St" style="width:100%;min-width:140px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCity_2" placeholder="Brisbane" style="width:100%;min-width:100px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrProvince_2" placeholder="QLD" style="width:100%;min-width:60px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrZip_2" placeholder="4000" style="width:80px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCountry_2" placeholder="AU" maxlength="2" style="width:50px;text-transform:uppercase;box-sizing:border-box;" /></td>
+                                </tr>
+                                <tr style="border-bottom:1px solid #f5f5f5;">
+                                    <td style="padding:5px 10px; text-align:center;"><input type="checkbox" id="addrCheck3" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrAddress1_3" placeholder="123 Main St" style="width:100%;min-width:140px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCity_3" placeholder="Perth" style="width:100%;min-width:100px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrProvince_3" placeholder="WA" style="width:100%;min-width:60px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrZip_3" placeholder="6000" style="width:80px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCountry_3" placeholder="AU" maxlength="2" style="width:50px;text-transform:uppercase;box-sizing:border-box;" /></td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:5px 10px; text-align:center;"><input type="checkbox" id="addrCheck4" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrAddress1_4" placeholder="123 Main St" style="width:100%;min-width:140px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCity_4" placeholder="Adelaide" style="width:100%;min-width:100px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrProvince_4" placeholder="SA" style="width:100%;min-width:60px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrZip_4" placeholder="5000" style="width:80px;box-sizing:border-box;" /></td>
+                                    <td style="padding:4px 6px;"><input type="text" id="addrCountry_4" placeholder="AU" maxlength="2" style="width:50px;text-transform:uppercase;box-sizing:border-box;" /></td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
-                    <div class="input-group">
-                        <label
-                            >Province / State
-                            <span style="font-weight: 400; color: #999"
-                                >(optional)</span
-                            ></label
-                        >
-                        <input
-                            type="text"
-                            id="shipProvince"
-                            placeholder="NSW"
-                        />
+                </div>
+
+                <!-- Product inputs -->
+                <div style="margin-bottom:20px; background:#fafafa; padding:16px; border-radius:8px; border:1px solid #eee;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:5px;">
+                        <label style="margin-bottom:0;">Input Mode <span style="font-weight:400; color:#999">(one per line)</span></label>
                     </div>
-                    <div class="input-group">
-                        <label>ZIP / Postal Code</label>
-                        <input type="text" id="shipZip" placeholder="2000" />
+                    <div style="display:flex; gap:8px; margin-bottom:6px;">
+                        <button
+                            id="inputModeHandlesBtn"
+                            onclick="setShippingInputMode('handles')"
+                            style="padding:4px 12px; font-size:12px; font-weight:600; background:#008060; color:white; border:1px solid #008060; border-radius:4px; cursor:pointer;"
+                        >Handles</button>
+                        <button
+                            id="inputModeVariantsBtn"
+                            onclick="setShippingInputMode('variants')"
+                            style="padding:4px 12px; font-size:12px; font-weight:600; background:#f1f2f3; color:#333; border:1px solid #ccc; border-radius:4px; cursor:pointer;"
+                        >Variant IDs ⚡</button>
                     </div>
-                    <div class="input-group">
-                        <label>Country Code</label>
-                        <input
-                            type="text"
-                            id="shipCountryCode"
-                            placeholder="AU"
-                            style="text-transform: uppercase"
-                            maxlength="2"
-                        />
-                    </div>
-                    <div class="input-group" style="grid-column: span 2">
-                        <label
-                            >Product Handles
-                            <span style="font-weight: 400; color: #999"
-                                >(one per line)</span
-                            ></label
-                        >
-                        <textarea
-                            id="shipHandles"
-                            rows="5"
-                            placeholder="my-product-handle&#10;another-product&#10;third-product"
-                            style="
-                                padding: 10px;
-                                border: 1px solid #ddd;
-                                border-radius: 6px;
-                                font-size: 14px;
-                                font-family: Consolas, monospace;
-                                resize: vertical;
-                            "
-                        ></textarea>
-                    </div>
+                    <textarea
+                        id="shipHandles"
+                        rows="5"
+                        placeholder="my-product-handle&#10;another-product&#10;third-product"
+                        style="width:100%; box-sizing:border-box; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; font-family:Consolas,monospace; resize:vertical;"
+                    ></textarea>
+                    <textarea
+                        id="shipVariantIds"
+                        rows="5"
+                        placeholder="12345678901&#10;gid://shopify/ProductVariant/12345678902&#10;12345678903"
+                        style="display:none; width:100%; box-sizing:border-box; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; font-family:Consolas,monospace; resize:vertical;"
+                    ></textarea>
+                    <div id="shipVariantIdsHint" style="display:none; margin-top:4px; font-size:0.8em; color:#888;">Numeric IDs or full GIDs — one per line. Skips the product lookup step entirely.</div>
                 </div>
 
                 <div style="text-align: center; margin-bottom: 20px">
@@ -778,19 +882,16 @@
                 </div>
 
                 <div id="shippingResultsArea" style="display: none">
-                    <h3>Shipping Rates</h3>
-                    <div
-                        style="
-                            overflow-x: auto;
-                            border: 1px solid #eee;
-                            border-radius: 8px;
-                        "
-                    >
-                        <table
-                            id="shippingTable"
-                            class="log-table"
-                            style="min-width: 600px"
-                        ></table>
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                        <h3 style="margin:0;">Shipping Rates</h3>
+                        <button
+                            id="copyTableBtn"
+                            onclick="copyShippingTable()"
+                            style="display:none; padding:6px 16px; font-size:12px; font-weight:600; background:#f1f2f3; color:#333; border:1px solid #ccc; border-radius:4px; cursor:pointer;"
+                        >Copy Table</button>
+                    </div>
+                    <div style="overflow-x:auto; border:1px solid #eee; border-radius:8px;">
+                        <table id="shippingTable" class="log-table" style="min-width:600px"></table>
                     </div>
                 </div>
             </div>
