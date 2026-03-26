@@ -239,6 +239,15 @@ ipcMain.handle("cleanup-unused-images", async (event, folderPath) => {
     await manifest.load();
     const manifestProducts = manifest.getAllProducts(); // object: handle -> productData
 
+    // Build a reverse map: folderName -> productData.
+    // The sync engine stores the folder as `handle-sku` but the manifest key is the bare
+    // handle, so looking up by entry.name (folder name) would always miss for SKU products.
+    const folderToManifest = new Map();
+    for (const [handle, product] of Object.entries(manifestProducts)) {
+        const key = product.folderName || handle; // folderName added by sync-engine
+        folderToManifest.set(key, product);
+    }
+
     let scannedCount = 0;
     let deletedCount = 0;
 
@@ -270,7 +279,7 @@ ipcMain.handle("cleanup-unused-images", async (event, folderPath) => {
         const productHandle = entry.name;
         const productPath = path.join(folderPath, productHandle);
 
-        const manifestProduct = manifestProducts[productHandle];
+        const manifestProduct = folderToManifest.get(productHandle);
         // If undefined, validFilenames is empty -> delete all media in this folder
         const validFilenames =
             manifestProduct && manifestProduct.media
@@ -342,7 +351,11 @@ ipcMain.handle(
             throw new Error("Provide either product handles or variant IDs.");
 
         if (hasVariantIds) {
-            return calculator.calculateFromVariantIds(variantIds, address, progress);
+            return calculator.calculateFromVariantIds(
+                variantIds,
+                address,
+                progress,
+            );
         } else {
             return calculator.calculate(handles, address, progress);
         }

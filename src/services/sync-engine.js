@@ -459,6 +459,7 @@ class SyncEngine {
                 tags: remoteProd.tags || [],
                 category: category,
                 sku: skus,
+                folderName: folderName, // store resolved folder name for cleanup lookup
                 updated_at: currentTimestamp, // local sync time
                 media: newMediaList,
             });
