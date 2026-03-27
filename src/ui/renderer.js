@@ -25,7 +25,10 @@ document.getElementById("shipVariantIds").value =
         saved.forEach((addr, i) => {
             const chk = document.getElementById(`addrCheck${i}`);
             if (chk) chk.checked = addr.checked !== false;
-            const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ""; };
+            const set = (id, val) => {
+                const el = document.getElementById(id);
+                if (el) el.value = val || "";
+            };
             set(`addrAddress1_${i}`, addr.address1);
             set(`addrCity_${i}`, addr.city);
             set(`addrProvince_${i}`, addr.province);
@@ -37,20 +40,29 @@ document.getElementById("shipVariantIds").value =
         const old1 = localStorage.getItem("shipAddress1");
         if (old1) {
             document.getElementById("addrAddress1_0").value = old1;
-            document.getElementById("addrCity_0").value = localStorage.getItem("shipCity") || "";
-            document.getElementById("addrProvince_0").value = localStorage.getItem("shipProvince") || "";
-            document.getElementById("addrZip_0").value = localStorage.getItem("shipZip") || "";
-            document.getElementById("addrCountry_0").value = localStorage.getItem("shipCountryCode") || "";
+            document.getElementById("addrCity_0").value =
+                localStorage.getItem("shipCity") || "";
+            document.getElementById("addrProvince_0").value =
+                localStorage.getItem("shipProvince") || "";
+            document.getElementById("addrZip_0").value =
+                localStorage.getItem("shipZip") || "";
+            document.getElementById("addrCountry_0").value =
+                localStorage.getItem("shipCountryCode") || "";
         }
     }
 })();
 
 function toggleAllAddresses() {
-    const checks = [0, 1, 2, 3, 4].map((i) => document.getElementById(`addrCheck${i}`));
+    const checks = [0, 1, 2, 3, 4].map((i) =>
+        document.getElementById(`addrCheck${i}`),
+    );
     const allChecked = checks.every((c) => c && c.checked);
-    checks.forEach((c) => { if (c) c.checked = !allChecked; });
-    document.getElementById("selectAllAddressesBtn").textContent =
-        allChecked ? "Select All" : "Deselect All";
+    checks.forEach((c) => {
+        if (c) c.checked = !allChecked;
+    });
+    document.getElementById("selectAllAddressesBtn").textContent = allChecked
+        ? "Select All"
+        : "Deselect All";
 }
 
 // Restore input mode toggle
@@ -724,13 +736,22 @@ async function calculateShipping() {
     for (let i = 0; i < 5; i++) {
         const chk = document.getElementById(`addrCheck${i}`);
         if (!chk || !chk.checked) continue;
-        const address1 = document.getElementById(`addrAddress1_${i}`).value.trim();
+        const address1 = document
+            .getElementById(`addrAddress1_${i}`)
+            .value.trim();
         const city = document.getElementById(`addrCity_${i}`).value.trim();
-        const province = document.getElementById(`addrProvince_${i}`).value.trim();
+        const province = document
+            .getElementById(`addrProvince_${i}`)
+            .value.trim();
         const zip = document.getElementById(`addrZip_${i}`).value.trim();
-        const countryCode = document.getElementById(`addrCountry_${i}`).value.trim().toUpperCase();
+        const countryCode = document
+            .getElementById(`addrCountry_${i}`)
+            .value.trim()
+            .toUpperCase();
         if (!address1 || !city || !zip || !countryCode) {
-            return alert(`Address ${i + 1} is incomplete. Fill in Address Line 1, City, ZIP, and Country Code.`);
+            return alert(
+                `Address ${i + 1} is incomplete. Fill in Address Line 1, City, ZIP, and Country Code.`,
+            );
         }
         addresses.push({ address1, city, province, zip, countryCode });
     }
@@ -752,8 +773,14 @@ async function calculateShipping() {
     localStorage.setItem("shipHandles", handlesRaw);
     localStorage.setItem("shipVariantIds", variantIdsRaw);
 
-    const handles = handlesRaw.split("\n").map((h) => h.trim()).filter((h) => h.length > 0);
-    const variantIds = variantIdsRaw.split("\n").map((v) => v.trim()).filter((v) => v.length > 0);
+    const handles = handlesRaw
+        .split("\n")
+        .map((h) => h.trim())
+        .filter((h) => h.length > 0);
+    const variantIds = variantIdsRaw
+        .split("\n")
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
 
     if (inputMode === "variants" && variantIds.length === 0)
         return alert("Please enter at least one variant ID.");
@@ -763,7 +790,9 @@ async function calculateShipping() {
     const shopUrl = document.getElementById("shopUrl").value.trim();
     const apiKey = document.getElementById("apiKey").value.trim();
     if (!shopUrl || !apiKey)
-        return alert("Please fill in Shop URL and API Token on the Sync Dashboard tab first.");
+        return alert(
+            "Please fill in Shop URL and API Token on the Sync Dashboard tab first.",
+        );
 
     // Reset
     _shippingRows = [];
@@ -774,14 +803,17 @@ async function calculateShipping() {
     btn.disabled = true;
     btn.innerText = "CALCULATING...";
     const copyBtn = document.getElementById("copyTableBtn");
+    const copyCustomBtn = document.getElementById("copyCustomFormatBtn");
     if (copyBtn) copyBtn.style.display = "none";
+    if (copyCustomBtn) copyCustomBtn.style.display = "none";
 
     document.getElementById("shippingLoading").style.display = "block";
     document.getElementById("shippingErrorArea").style.display = "none";
     document.getElementById("shippingResultsArea").style.display = "block";
     renderShippingTable({ rows: [], carriers: [], hasVariants: false });
 
-    const itemCount = inputMode === "variants" ? variantIds.length : handles.length;
+    const itemCount =
+        inputMode === "variants" ? variantIds.length : handles.length;
     const progressMsg = document.getElementById("shippingProgressMsg");
 
     try {
@@ -808,8 +840,175 @@ async function calculateShipping() {
         btn.innerText = "CALCULATE SHIPPING";
         document.getElementById("shippingLoading").style.display = "none";
         if (progressMsg) progressMsg.textContent = "";
-        if (_shippingRows.length > 0 && copyBtn) copyBtn.style.display = "inline-block";
+        if (_shippingRows.length > 0 && copyBtn)
+            copyBtn.style.display = "inline-block";
+        if (_shippingRows.length > 0 && copyCustomBtn)
+            copyCustomBtn.style.display = "inline-block";
     }
+}
+
+function pasteShippingOutput() {
+    const modal = document.getElementById("pasteOutputModal");
+    document.getElementById("pasteOutputTextarea").value = "";
+    modal.style.display = "flex";
+    setTimeout(
+        () => document.getElementById("pasteOutputTextarea").focus(),
+        50,
+    );
+}
+
+function closePasteModal() {
+    document.getElementById("pasteOutputModal").style.display = "none";
+}
+
+function importPastedOutput() {
+    const tsv = document.getElementById("pasteOutputTextarea").value.trim();
+    if (!tsv) return alert("Nothing pasted.");
+
+    const lines = tsv.split("\n").map((l) => l.trimEnd());
+    if (lines.length < 2)
+        return alert(
+            "Pasted data needs at least a header row and one data row.",
+        );
+
+    const headers = lines[0].split("\t").map((h) => h.trim());
+    if (headers.length < 3)
+        return alert(
+            "Unrecognised format. Make sure you copied from the Shipping Rates table.",
+        );
+
+    const hasVariants = headers.includes("Variant");
+    const fixedCols = hasVariants
+        ? ["Handle", "Product Title", "Variant", "SKU", "Weight"]
+        : ["Handle", "Product Title", "SKU", "Weight"];
+    const cityColIdx = headers.length - 1;
+    const carriers = headers.slice(fixedCols.length, cityColIdx);
+
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const cols = lines[i].split("\t");
+        const row = {
+            handle: cols[0] || "",
+            title: cols[1] || "",
+            rates: {},
+            addressCity: cols[cityColIdx] || "",
+        };
+        if (hasVariants) {
+            row.variant = cols[2] || "";
+            row.sku = cols[3] || "";
+            row.weight = cols[4] || "";
+        } else {
+            row.sku = cols[2] || "";
+            row.weight = cols[3] || "";
+        }
+        carriers.forEach((carrier, ci) => {
+            const val = (cols[fixedCols.length + ci] || "").trim();
+            if (val && val !== "N/A") row.rates[carrier] = val;
+        });
+        rows.push(row);
+    }
+
+    if (rows.length === 0)
+        return alert("No data rows found in pasted content.");
+
+    _shippingRows = rows;
+    _shippingCarriers = carriers;
+    _shippingHasVariants = hasVariants;
+
+    closePasteModal();
+    renderShippingTable({ rows, carriers, hasVariants });
+
+    const copyBtn = document.getElementById("copyTableBtn");
+    if (copyBtn) copyBtn.style.display = "inline-block";
+    const copyCustomBtn = document.getElementById("copyCustomFormatBtn");
+    if (copyCustomBtn) copyCustomBtn.style.display = "inline-block";
+}
+
+function copyShippingCustomFormat() {
+    if (!_shippingRows.length) return;
+
+    const carriers = _shippingCarriers;
+    const hasVariants = _shippingHasVariants;
+
+    // Collect unique cities in order of first appearance
+    const cities = [];
+    const citySet = new Set();
+    _shippingRows.forEach((r) => {
+        if (r.addressCity && !citySet.has(r.addressCity)) {
+            citySet.add(r.addressCity);
+            cities.push(r.addressCity);
+        }
+    });
+
+    // Collect unique products (handle + variant) in order of first appearance
+    const productKeys = [];
+    const productKeySet = new Set();
+    const productMap = {};
+    _shippingRows.forEach((r) => {
+        const key = r.handle + "\x00" + (r.variant || "");
+        if (!productKeySet.has(key)) {
+            productKeySet.add(key);
+            productKeys.push(key);
+            productMap[key] = {
+                handle: r.handle,
+                title: r.title,
+                variant: r.variant || "",
+                sku: r.sku || "",
+                weight: r.weight || "",
+                ratesByCarrierCity: {},
+            };
+        }
+        carriers.forEach((carrier) => {
+            const rateKey = carrier + "\x00" + r.addressCity;
+            productMap[key].ratesByCarrierCity[rateKey] =
+                r.rates[carrier] || "";
+        });
+    });
+
+    const fixedCols = hasVariants
+        ? ["Handle", "Product Title", "Variant", "SKU", "Weight"]
+        : ["Handle", "Product Title", "SKU", "Weight"];
+    const numFixed = fixedCols.length;
+
+    const tsvLines = [];
+
+    // Row 1: carrier name in the first column of its group, blanks for the rest
+    const row1 = Array(numFixed).fill("");
+    carriers.forEach((carrier) => {
+        row1.push(carrier);
+        for (let c = 1; c < cities.length; c++) row1.push("");
+    });
+    tsvLines.push(row1.join("\t"));
+
+    // Row 2: fixed headers then cities repeated per carrier
+    const row2 = [...fixedCols];
+    carriers.forEach(() => cities.forEach((city) => row2.push(city)));
+    tsvLines.push(row2.join("\t"));
+
+    // Data rows: one row per unique product
+    productKeys.forEach((key) => {
+        const p = productMap[key];
+        const dataRow = hasVariants
+            ? [p.handle, p.title, p.variant, p.sku, p.weight]
+            : [p.handle, p.title, p.sku, p.weight];
+        carriers.forEach((carrier) => {
+            cities.forEach((city) => {
+                const rate = p.ratesByCarrierCity[carrier + "\x00" + city];
+                dataRow.push(rate || "N/A");
+            });
+        });
+        tsvLines.push(dataRow.join("\t"));
+    });
+
+    navigator.clipboard.writeText(tsvLines.join("\n")).then(() => {
+        const btn = document.getElementById("copyCustomFormatBtn");
+        const orig = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => {
+            btn.textContent = orig;
+        }, 2000);
+    });
 }
 
 function copyShippingTable() {
@@ -825,7 +1024,9 @@ function copyShippingTable() {
         const btn = document.getElementById("copyTableBtn");
         const orig = btn.textContent;
         btn.textContent = "Copied!";
-        setTimeout(() => { btn.textContent = orig; }, 2000);
+        setTimeout(() => {
+            btn.textContent = orig;
+        }, 2000);
     });
 }
 
@@ -929,7 +1130,8 @@ function renderShippingTable(result) {
             const cityTd = document.createElement("td");
             cityTd.textContent = row.addressCity || "";
             cityTd.style.fontWeight = "600";
-            cityTd.style.color = row.addressCity !== lastCity ? "#008060" : "#bbb";
+            cityTd.style.color =
+                row.addressCity !== lastCity ? "#008060" : "#bbb";
             cityTd.style.whiteSpace = "nowrap";
             if (row.addressCity !== lastCity) lastCity = row.addressCity;
             tr.appendChild(cityTd);
