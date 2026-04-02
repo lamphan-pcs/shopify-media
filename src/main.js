@@ -4,6 +4,7 @@ const fs = require("fs");
 const SyncEngine = require("./services/sync-engine");
 const ManifestManager = require("./utils/manifest-manager");
 const ShippingCalculator = require("./services/shipping-calculator");
+const ShopifyClient = require("./services/shopify-client");
 
 // Auto-reload the app on source changes during local development.
 if (!app.isPackaged) {
@@ -158,17 +159,41 @@ ipcMain.handle("load-library", async (event, folderPath) => {
 
     // 3. Enhance physical results with manifest data if available
     const enhancedResults = physicalProducts.map((p) => {
-        const tracked = manifestProducts[p.handle];
-        if (tracked) {
+        const folderName = p.handle; // This is the folder name, may be "handle-sku"
+
+        // Try to find matching product in manifest
+        // First try exact match (handle-sku), then try to extract handle from folder name
+        let manifestProduct = manifestProducts[folderName];
+        let actualHandle = folderName;
+
+        if (!manifestProduct) {
+            // If no exact match, search for a product whose folderName matches
+            for (const [mHandle, mData] of Object.entries(manifestProducts)) {
+                if ((mData.folderName || mHandle) === folderName) {
+                    manifestProduct = mData;
+                    actualHandle = mHandle; // Use the manifest key as the actual handle
+                    break;
+                }
+            }
+        }
+
+        // Update product with actual handle
+        p.handle = actualHandle;
+        p.title = p.title || actualHandle;
+
+        if (manifestProduct) {
             // Merge metadata from manifest
-            p.sku = tracked.sku || "";
-            p.category = tracked.category || "";
-            p.tags = tracked.tags || [];
+            p.sku = manifestProduct.sku || "";
+            p.category = manifestProduct.category || "";
+            p.tags = manifestProduct.tags || [];
+            p.shopifyId = manifestProduct.id || "";
 
             p.media = p.media.map((m) => {
-                const knownFile = tracked.media.find(
-                    (tm) => tm.filename === m.filename,
-                );
+                const knownFile = manifestProduct.media
+                    ? manifestProduct.media.find(
+                          (tm) => tm.filename === m.filename,
+                      )
+                    : null;
                 // Use persisted 'lastStatus' if available, otherwise 'unchanged'
                 const manifestStatus = knownFile
                     ? knownFile.lastStatus || "unchanged"
@@ -189,6 +214,8 @@ ipcMain.handle("load-library", async (event, folderPath) => {
                     ...m,
                     status: manifestStatus,
                     group: group,
+                    shopifyId: knownFile ? knownFile.id || "" : "",
+                    position: knownFile ? knownFile.position || 0 : 0,
                 };
             });
         } else {
@@ -358,6 +385,54 @@ ipcMain.handle(
             );
         } else {
             return calculator.calculate(handles, address, progress);
+        }
+    },
+);
+
+ipcMain.handle(
+    "reorder-product-media",
+    async (event, { shopUrl, apiKey, reorders }) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!Array.isArray(reorders) || reorders.length === 0)
+            throw new Error("No reorders provided");
+
+        const client = new ShopifyClient(shopUrl, apiKey);
+        const results = [];
+
+        for (const { handle, productId, moves } of reorders) {
+            try {
+                await client.reorderProductMedia(productId, moves);
+                results.push({ handle, success: true });
+            } catch (err) {
+                console.error(`[Reorder] Failed for ${handle}:`, err.message);
+                results.push({ handle, success: false, error: err.message });
+            }
+        }
+
+        return results;
+    },
+);
+
+ipcMain.handle(
+    "fetch-product-id",
+    async (event, { shopUrl, apiKey, handle }) => {
+        if (!shopUrl || !apiKey) throw new Error("Missing credentials");
+        if (!handle) throw new Error("Missing product handle");
+
+        try {
+            const client = new ShopifyClient(shopUrl, apiKey);
+            const productId = await client.getProductIdByHandle(handle);
+            if (!productId) {
+                throw new Error(`Product not found: ${handle}`);
+            }
+            return productId;
+        } catch (err) {
+            console.error(
+                `[FetchProductId] Failed for ${handle}:`,
+                err.message,
+            );
+            throw err;
         }
     },
 );

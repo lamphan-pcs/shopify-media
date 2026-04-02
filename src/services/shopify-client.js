@@ -27,10 +27,10 @@ class ShopifyClient {
     async fetchProducts(
         lastSyncDate = null,
         cursor = null,
-        metafieldKeysString = ""
+        metafieldKeysString = "",
     ) {
         console.log(
-            `[Shopify] Fetching products. Cursor: ${cursor}, Metafields: ${metafieldKeysString}`
+            `[Shopify] Fetching products. Cursor: ${cursor}, Metafields: ${metafieldKeysString}`,
         );
 
         // Construct filter
@@ -54,7 +54,7 @@ class ShopifyClient {
                 }
 
                 console.log(
-                    `[Shopify] Generating query for metafield: namespace=${namespace}, key=${key}`
+                    `[Shopify] Generating query for metafield: namespace=${namespace}, key=${key}`,
                 );
 
                 metafieldQuery += `
@@ -161,6 +161,84 @@ class ShopifyClient {
         return this._request(query, { cursor });
     }
 
+    async reorderProductMedia(productId, moves = []) {
+        if (!productId) {
+            throw new Error("Missing product ID for media reorder");
+        }
+        if (!Array.isArray(moves) || moves.length < 2) {
+            throw new Error("At least two media moves are required");
+        }
+
+        const toGraphqlMediaId = (id) => {
+            const raw = String(id || "").trim();
+            if (!raw) return raw;
+            if (raw.startsWith("gid://")) return raw;
+
+            const match = raw.match(/(\d+)$/);
+            const numeric = match ? match[1] : raw;
+            return `gid://shopify/MediaImage/${numeric}`;
+        };
+
+        // Shopify expects both id and newPosition as strings in MoveInput.
+        const formattedMoves = moves.map((m) => ({
+            id: toGraphqlMediaId(m.id),
+            newPosition: String(Number(m.newPosition)),
+        }));
+
+        const mutation = `
+        mutation productReorderMedia($id: ID!, $moves: [MoveInput!]!) {
+            productReorderMedia(id: $id, moves: $moves) {
+                job {
+                    id
+                }
+                userErrors {
+                    field
+                    message
+                }
+                mediaUserErrors {
+                    field
+                    message
+                }
+            }
+        }`;
+
+        const data = await this._request(mutation, {
+            id: productId,
+            moves: formattedMoves,
+        });
+
+        const result = data.productReorderMedia;
+        if (!result) {
+            throw new Error("No result from productReorderMedia mutation");
+        }
+
+        const errors = [];
+        (result.userErrors || []).forEach((e) => errors.push(e.message));
+        (result.mediaUserErrors || []).forEach((e) => errors.push(e.message));
+
+        if (errors.length > 0) {
+            throw new Error(`Shopify reorder failed: ${errors.join(", ")}`);
+        }
+
+        return result.job || null;
+    }
+
+    async getProductIdByHandle(handle) {
+        if (!handle) {
+            throw new Error("Handle is required");
+        }
+
+        const query = `
+        {
+            productByHandle(handle: "${handle}") {
+                id
+            }
+        }`;
+
+        const data = await this._request(query);
+        return data?.productByHandle?.id || null;
+    }
+
     async _request(query, variables = {}) {
         try {
             const response = await axios.post(
@@ -172,7 +250,7 @@ class ShopifyClient {
                         "Content-Type": "application/json",
                     },
                     timeout: 20000,
-                }
+                },
             );
 
             if (response.data.errors) {

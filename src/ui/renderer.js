@@ -4,6 +4,10 @@ const path = require("path"); // Load path module at top level
 // Media type filter state
 let activeMediaType = localStorage.getItem("activeMediaType") || "all";
 
+// Pending image reorders: { [handle]: { productId, moves: [{id, newPosition}] } }
+let pendingReorders = {};
+const _dnd = { srcEl: null };
+
 let selectedPath = localStorage.getItem("lastPath") || "";
 document.getElementById("pathDisplay").value = selectedPath;
 document.getElementById("shopUrl").value =
@@ -371,6 +375,182 @@ if (document.readyState === "loading") {
     initMediaTypeButtons();
 }
 
+// --- Image Reorder Bar ---
+
+function updateReorderBar() {
+    const count = Object.keys(pendingReorders).length;
+    const bar = document.getElementById("reorderBar");
+    const msg = document.getElementById("reorderBarMsg");
+    if (!bar) return;
+    if (count === 0) {
+        bar.style.display = "none";
+    } else {
+        bar.style.display = "flex";
+        if (msg)
+            msg.textContent = `${count} product${count !== 1 ? "s" : ""} with reordered images — push to apply on Shopify`;
+    }
+}
+
+async function pushReordersToShopify() {
+    const shopUrl = document.getElementById("shopUrl").value.trim();
+    const apiKey = document.getElementById("apiKey").value.trim();
+    if (!shopUrl || !apiKey) {
+        return alert(
+            "Please fill in Shop URL and API Token on the Sync Dashboard tab first.",
+        );
+    }
+    const handles = Object.keys(pendingReorders);
+    if (handles.length === 0) return;
+
+    // Check if any productIds are missing and fetch them
+    const missingHandles = handles.filter((h) => !pendingReorders[h].productId);
+    if (missingHandles.length > 0) {
+        const btn = document.getElementById("pushReordersBtn");
+        if (btn) btn.textContent = `Fetching IDs…`;
+
+        try {
+            for (const h of missingHandles) {
+                const id = await ipcRenderer.invoke("fetch-product-id", {
+                    shopUrl,
+                    apiKey,
+                    handle: h,
+                });
+                if (id) {
+                    pendingReorders[h].productId = id;
+                }
+            }
+        } catch (err) {
+            showCopyableError(
+                "Error Fetching Product IDs",
+                err.message || String(err),
+            );
+            if (btn) btn.textContent = "Push to Shopify";
+            return;
+        }
+    }
+
+    const reorders = handles.map((h) => ({
+        handle: h,
+        productId: pendingReorders[h].productId,
+        moves: pendingReorders[h].moves,
+    }));
+
+    const btn = document.getElementById("pushReordersBtn");
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = `Pushing ${handles.length}…`;
+    }
+
+    try {
+        const results = await ipcRenderer.invoke("reorder-product-media", {
+            shopUrl,
+            apiKey,
+            reorders,
+        });
+        const failed = results.filter((r) => !r.success);
+        const succeeded = results.filter((r) => r.success);
+
+        succeeded.forEach((r) => {
+            delete pendingReorders[r.handle];
+            const productRow = document.querySelector(
+                `[data-product-handle="${r.handle}"]`,
+            );
+            if (productRow) {
+                productRow.style.outline = "2px solid #4caf50";
+                setTimeout(() => {
+                    if (productRow) productRow.style.outline = "";
+                }, 2500);
+            }
+        });
+
+        if (failed.length > 0) {
+            const errorText = `${succeeded.length} reorder(s) pushed.\n\n${failed.length} failed:\n${failed.map((r) => `• ${r.handle}: ${r.error}`).join("\n")}`;
+            showCopyableError("Reorder Partially Failed", errorText);
+        }
+    } catch (err) {
+        showCopyableError("Reorder Failed", err.message || String(err));
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Push to Shopify";
+        }
+        updateReorderBar();
+    }
+}
+
+function discardReorders() {
+    pendingReorders = {};
+    document.querySelectorAll("[data-product-handle]").forEach((el) => {
+        el.style.outline = "";
+    });
+    updateReorderBar();
+}
+
+// --- Copyable Error Modal ---
+
+function showCopyableError(title, message) {
+    const modal = document.getElementById("errorModal");
+    if (!modal) {
+        // Create modal if it doesn't exist
+        const div = document.createElement("div");
+        div.id = "errorModal";
+        div.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        `;
+        div.innerHTML = `
+            <div style="background: white; border-radius: 8px; padding: 20px; max-width: 600px; max-height: 70vh; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                <h2 id="errorModalTitle" style="margin-top: 0; color: #d32f2f;"></h2>
+                <textarea id="errorModalText" style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 12px; overflow: auto; resize: none;"></textarea>
+                <div style="display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end;">
+                    <button onclick="copyErrorMessage()" style="padding: 8px 16px; background: #2196f3; color: white; border: none; border-radius: 4px; cursor: pointer;">Copy</button>
+                    <button onclick="closeErrorModal()" style="padding: 8px 16px; background: #f1f2f3; color: #333; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(div);
+    }
+
+    document.getElementById("errorModalTitle").textContent = title;
+    document.getElementById("errorModalText").value = message;
+    document.getElementById("errorModal").style.display = "flex";
+}
+
+function closeErrorModal() {
+    const modal = document.getElementById("errorModal");
+    if (modal) modal.style.display = "none";
+}
+
+function copyErrorMessage() {
+    const textarea = document.getElementById("errorModalText");
+    textarea.select();
+    document.execCommand("copy");
+    const btn = event.target;
+    const original = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => {
+        btn.textContent = original;
+    }, 2000);
+}
+
+// Close modal on Escape key
+document.addEventListener("keydown", (e) => {
+    if (
+        e.key === "Escape" &&
+        document.getElementById("errorModal")?.style.display === "flex"
+    ) {
+        closeErrorModal();
+    }
+});
+
 ipcRenderer.on("sync-progress", (event, data) => {
     const area = document.getElementById("progressArea");
     const fill = document.getElementById("progFill");
@@ -574,6 +754,7 @@ function renderGallery(products, containerId, showAll = false) {
             const row = document.createElement("div");
             row.style.cssText =
                 "background:white; border:1px solid #e1e3e5; margin-bottom:15px; border-radius:8px; padding:15px;";
+            row.dataset.productHandle = prod.handle;
 
             // Header
             const header = document.createElement("div");
@@ -617,20 +798,125 @@ function renderGallery(products, containerId, showAll = false) {
                     groups[g].push(m);
                 });
 
-                const renderSection = (title, items) => {
+                const canDnd = true; // Allow drag-drop for all synced products; IDs fetched on push
+
+                const renderSection = (title, items, isDraggable = false) => {
                     if (items.length === 0) return;
 
                     const sec = document.createElement("div");
-                    sec.innerHTML = `<h5 style="margin:0 0 8px 0; color:#555; text-transform:uppercase; font-size:11px; letter-spacing:0.5px; border-bottom:1px solid #eee; padding-bottom:4px;">${title}</h5>`;
+                    const hint = isDraggable
+                        ? ' <span style="font-size:10px;color:#aaa;font-weight:400;margin-left:4px;">drag to reorder</span>'
+                        : "";
+                    sec.innerHTML = `<h5 style="margin:0 0 8px 0; color:#555; text-transform:uppercase; font-size:11px; letter-spacing:0.5px; border-bottom:1px solid #eee; padding-bottom:4px;">${title}${hint}</h5>`;
 
                     const rowDiv = document.createElement("div");
                     rowDiv.style.cssText =
                         "display:flex; flex-wrap:wrap; gap:10px;";
 
+                    if (isDraggable && canDnd) {
+                        rowDiv.dataset.dndHandle = prod.handle;
+                        rowDiv.dataset.dndProductId = prod.shopifyId || ""; // Can be empty; fetched on push
+
+                        rowDiv.addEventListener("dragover", (e) => {
+                            e.preventDefault();
+                            const target =
+                                e.target.closest &&
+                                e.target.closest(".dnd-card");
+                            if (target && target !== _dnd.srcEl) {
+                                rowDiv
+                                    .querySelectorAll(".dnd-card")
+                                    .forEach((c) => {
+                                        c.style.outline = "";
+                                    });
+                                target.style.outline = "2px dashed #008060";
+                            }
+                        });
+
+                        rowDiv.addEventListener("dragleave", (e) => {
+                            if (!rowDiv.contains(e.relatedTarget)) {
+                                rowDiv
+                                    .querySelectorAll(".dnd-card")
+                                    .forEach((c) => {
+                                        c.style.outline = "";
+                                    });
+                            }
+                        });
+
+                        rowDiv.addEventListener("drop", (e) => {
+                            e.preventDefault();
+                            rowDiv
+                                .querySelectorAll(".dnd-card")
+                                .forEach((c) => {
+                                    c.style.outline = "";
+                                });
+                            const dst =
+                                e.target.closest &&
+                                e.target.closest(".dnd-card");
+                            if (
+                                !dst ||
+                                !_dnd.srcEl ||
+                                dst === _dnd.srcEl ||
+                                !rowDiv.contains(dst)
+                            )
+                                return;
+
+                            const srcIdx = [...rowDiv.children].indexOf(
+                                _dnd.srcEl,
+                            );
+                            const dstIdx = [...rowDiv.children].indexOf(dst);
+                            if (srcIdx < dstIdx)
+                                rowDiv.insertBefore(
+                                    _dnd.srcEl,
+                                    dst.nextSibling,
+                                );
+                            else rowDiv.insertBefore(_dnd.srcEl, dst);
+
+                            const handle = rowDiv.dataset.dndHandle;
+                            const productId = rowDiv.dataset.dndProductId;
+                            const moves = [
+                                ...rowDiv.querySelectorAll(".dnd-card"),
+                            ].map((c, i) => ({
+                                id: c.dataset.dndMediaId,
+                                newPosition: i,
+                            }));
+
+                            if (moves.length >= 2) {
+                                pendingReorders[handle] = { productId, moves };
+                                const productRow = document.querySelector(
+                                    `[data-product-handle="${handle}"]`,
+                                );
+                                if (productRow)
+                                    productRow.style.outline =
+                                        "2px solid #ff9800";
+                                updateReorderBar();
+                            }
+                        });
+                    }
+
                     items.forEach((m) => {
                         const card = document.createElement("div");
                         card.style.cssText =
                             "width:100px; height:100px; border:1px solid #ddd; border-radius:4px; overflow:hidden; position:relative; background:#f0f0f0;";
+
+                        const hasSyncId =
+                            isDraggable && canDnd && !!m.shopifyId;
+                        if (isDraggable && canDnd) {
+                            card.draggable = true;
+                            card.dataset.dndMediaId = m.shopifyId || m.filename; // Use filename as fallback key
+                            card.style.cursor = "grab";
+                            card.classList.add("dnd-card");
+                            card.addEventListener("dragstart", (e) => {
+                                _dnd.srcEl = card;
+                                e.dataTransfer.effectAllowed = "move";
+                                setTimeout(() => {
+                                    card.style.opacity = "0.4";
+                                }, 0);
+                            });
+                            card.addEventListener("dragend", () => {
+                                card.style.opacity = "1";
+                                _dnd.srcEl = null;
+                            });
+                        }
 
                         if (m.status && m.status !== "unchanged") {
                             const badge = document.createElement("div");
@@ -646,7 +932,7 @@ function renderGallery(products, containerId, showAll = false) {
                             filePath = "/" + filePath;
                         img.src = "file://" + filePath;
                         img.style.cssText =
-                            "width:100%; height:100%; object-fit:contain; background:#fff;"; // CHANGED to contain
+                            "width:100%; height:100%; object-fit:contain; background:#fff; pointer-events:none;";
                         img.title = m.filename;
                         img.onerror = function () {
                             this.style.display = "none";
@@ -657,7 +943,7 @@ function renderGallery(products, containerId, showAll = false) {
 
                         const label = document.createElement("div");
                         label.style.cssText =
-                            "position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.7); color:white; font-size:9px; padding:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center;";
+                            "position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.7); color:white; font-size:9px; padding:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; pointer-events:none;";
                         label.textContent = m.filename;
                         card.appendChild(label);
 
@@ -668,15 +954,20 @@ function renderGallery(products, containerId, showAll = false) {
                     mainWrapper.appendChild(sec);
                 };
 
+                // Sort main images by manifest position for correct initial order
+                groups.main.sort(
+                    (a, b) => (a.position || 0) - (b.position || 0),
+                );
+
                 // Order: Main, Banner, Extra, Other
                 // Filter based on activeMediaType
                 if (activeMediaType === "all") {
-                    renderSection("Main Images", groups.main);
+                    renderSection("Main Images", groups.main, true);
                     renderSection("Banners", groups.banner);
                     renderSection("Extras", groups.extra);
                     renderSection("Other", groups.other);
                 } else if (activeMediaType === "main") {
-                    renderSection("Main Images", groups.main);
+                    renderSection("Main Images", groups.main, true);
                 } else if (activeMediaType === "banner") {
                     renderSection("Banners", groups.banner);
                 } else if (activeMediaType === "extra") {

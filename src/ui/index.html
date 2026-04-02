@@ -689,6 +689,60 @@
                         />
                     </div>
                 </div>
+                <!-- Pending Reorder Bar -->
+                <div
+                    id="reorderBar"
+                    style="
+                        display: none;
+                        background: #fff3cd;
+                        border: 1px solid #ffc107;
+                        border-radius: 6px;
+                        padding: 10px 15px;
+                        margin-bottom: 10px;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 10px;
+                    "
+                >
+                    <div style="display: flex; align-items: center; gap: 8px">
+                        <span style="font-size: 1.1em">📋</span>
+                        <span
+                            id="reorderBarMsg"
+                            style="font-weight: 600; color: #856404"
+                        ></span>
+                    </div>
+                    <div style="display: flex; gap: 8px">
+                        <button
+                            id="pushReordersBtn"
+                            onclick="pushReordersToShopify()"
+                            style="
+                                padding: 7px 16px;
+                                background: #008060;
+                                color: white;
+                                border: none;
+                                border-radius: 4px;
+                                cursor: pointer;
+                                font-weight: bold;
+                            "
+                        >
+                            Push to Shopify
+                        </button>
+                        <button
+                            onclick="discardReorders()"
+                            style="
+                                padding: 7px 16px;
+                                background: #f1f2f3;
+                                color: #333;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                                cursor: pointer;
+                            "
+                        >
+                            Discard
+                        </button>
+                    </div>
+                </div>
+
                 <div
                     id="fullLibraryArea"
                     style="
