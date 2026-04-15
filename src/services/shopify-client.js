@@ -34,7 +34,7 @@ class ShopifyClient {
         );
 
         // Construct filter
-        let queryFilter = "status:active";
+        let queryFilter = "";
         if (lastSyncDate) {
             queryFilter += ` updated_at:>'${lastSyncDate}'`;
         }
@@ -93,9 +93,13 @@ class ShopifyClient {
             });
         }
 
+        const queryArg = queryFilter.trim()
+            ? `, query: "${queryFilter.trim()}"`
+            : "";
+
         const query = `
         query ($cursor: String) {
-            products(first: 10, after: $cursor, query: "${queryFilter}") {
+            products(first: 10, after: $cursor${queryArg}) {
                 pageInfo {
                     hasNextPage
                     endCursor
@@ -237,6 +241,206 @@ class ShopifyClient {
 
         const data = await this._request(query);
         return data?.productByHandle?.id || null;
+    }
+
+    async getProductsForExport(
+        metafieldKeysString = "",
+        cursor = null,
+        limit = 10,
+    ) {
+        console.log(
+            `[Shopify] Fetching products for export. Cursor: ${cursor}, Limit: ${limit}`,
+        );
+
+        // Build Metafields Query Segment
+        let metafieldQuery = "";
+        if (metafieldKeysString) {
+            const keys = metafieldKeysString.split(",").map((k) => k.trim());
+            keys.forEach((k, index) => {
+                const part = k.split(".");
+                let namespace = "custom";
+                let key = k;
+
+                if (part.length >= 2) {
+                    namespace = part[0];
+                    key = part.slice(1).join(".");
+                }
+
+                metafieldQuery += `
+                    mf_${index}: metafield(namespace: "${namespace}", key: "${key}") {
+                        value
+                        type
+                    }`;
+            });
+        }
+
+        // Also fetch standard Shopify metafields for SEO and other properties
+        if (!metafieldQuery.includes("mm-google-shopping")) {
+            metafieldQuery += `
+                metafieldGoogleProduct: metafield(namespace: "mm-google-shopping", key: "custom_product") {
+                    value
+                    type
+                }
+                metafieldFragrance: metafield(namespace: "shopify", key: "fragrance") {
+                    value
+                }
+                metafieldMoisturizerType: metafield(namespace: "shopify", key: "moisturizer-type") {
+                    value
+                }
+                metafieldProductForm: metafield(namespace: "shopify", key: "product-form") {
+                    value
+                }`;
+        }
+
+        const query = `
+        query ($cursor: String) {
+            products(first: ${limit}, after: $cursor) {
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+                edges {
+                    node {
+                        id
+                        legacyResourceId
+                        handle
+                        title
+                        bodyHtml
+                        vendor
+                        productType
+                        tags
+                        publishedAt
+                        status
+                        seoTitle: metafield(namespace: "seo", key: "title") {
+                            value
+                        }
+                        seoDescription: metafield(namespace: "seo", key: "description") {
+                            value
+                        }
+                        category {
+                            name
+                        }
+                        options {
+                            id
+                            name
+                            position
+                            values
+                        }
+                        variants(first: 50) {
+                            edges {
+                                node {
+                                    id
+                                    legacyResourceId
+                                    title
+                                    sku
+                                    barcode
+                                    price
+                                    compareAtPrice
+                                    inventoryQuantity
+                                    inventoryItem {
+                                        id
+                                        tracked
+                                        requiresShipping
+                                        sku
+                                    }
+                                    taxCode
+                                    taxable
+                                    image {
+                                        id
+                                        url
+                                        altText
+                                    }
+                                }
+                            }
+                        }
+                        images(first: 100) {
+                            edges {
+                                node {
+                                    id
+                                    url
+                                    altText
+                                }
+                            }
+                        }
+                        ${metafieldQuery}
+                    }
+                }
+            }
+        }`;
+
+        return this._request(query, { cursor });
+    }
+
+    async testExportData(metafieldKeysString = "", productLimit = 3) {
+        console.log(`[Shopify] Testing export with ${productLimit} products`);
+        const result = await this.getProductsForExport(
+            metafieldKeysString,
+            null,
+            productLimit,
+        );
+
+        // Return raw data for inspection
+        return {
+            timestamp: new Date().toISOString(),
+            productCount: result.products?.edges?.length || 0,
+            products: result.products?.edges || [],
+            pageInfo: result.products?.pageInfo || {},
+        };
+    }
+
+    async getAllProductsForExport(metafieldKeysString = "", onProgress = null) {
+        console.log("[Shopify] Starting full export of all products");
+        const allProducts = [];
+        let cursor = null;
+        let pageCount = 0;
+        const maxPages = 1000; // Safety limit
+        const batchSize = 100; // Increased from 10 for faster export
+
+        try {
+            while (pageCount < maxPages) {
+                const response = await this.getProductsForExport(
+                    metafieldKeysString,
+                    cursor,
+                    batchSize,
+                );
+
+                const products = response.products?.edges || [];
+                allProducts.push(...products);
+                pageCount++;
+
+                console.log(
+                    `[Shopify] Export page ${pageCount}: fetched ${products.length} products (Total: ${allProducts.length})`,
+                );
+
+                // Notify progress
+                if (onProgress) {
+                    onProgress({
+                        page: pageCount,
+                        pageSize: products.length,
+                        totalProducts: allProducts.length,
+                        hasMore:
+                            response.products?.pageInfo?.hasNextPage || false,
+                    });
+                }
+
+                if (!response.products?.pageInfo?.hasNextPage) {
+                    break;
+                }
+
+                cursor = response.products.pageInfo.endCursor;
+
+                // Minimal delay to respect rate limits (25ms instead of 100ms)
+                await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+        } catch (error) {
+            console.error("[Shopify] Export error:", error.message);
+            throw error;
+        }
+
+        console.log(
+            `[Shopify] Export complete: ${allProducts.length} total products fetched in ${pageCount} pages`,
+        );
+        return allProducts;
     }
 
     async _request(query, variables = {}) {

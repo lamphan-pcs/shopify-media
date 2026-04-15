@@ -9,21 +9,57 @@ let pendingReorders = {};
 const _dnd = { srcEl: null };
 
 let selectedPath = localStorage.getItem("lastPath") || "";
-document.getElementById("pathDisplay").value = selectedPath;
-document.getElementById("shopUrl").value =
-    localStorage.getItem("lastShop") || "";
-document.getElementById("apiKey").value = localStorage.getItem("lastKey") || "";
-document.getElementById("metafields").value =
-    localStorage.getItem("lastMetafields") || "";
 
-// Restore shipping calculator inputs
-document.getElementById("shipHandles").value =
-    localStorage.getItem("shipHandles") || "";
-document.getElementById("shipVariantIds").value =
-    localStorage.getItem("shipVariantIds") || "";
+// Set up export progress listener - only once
+ipcRenderer.on("export-progress", (event, progress) => {
+    const progressArea = document.getElementById("progressArea");
+    const progFill = document.getElementById("progFill");
+    const statusText = document.getElementById("statusText");
 
-// Restore 5 address rows — migrate legacy single-address keys if needed
-(function restoreAddresses() {
+    if (!progressArea || !progFill || !statusText) return;
+
+    progressArea.style.display = "block";
+
+    if (progress.status === "generating") {
+        statusText.innerText = `✓ Downloaded ${progress.totalProducts} products. Generating CSV...`;
+        progFill.style.width = "95%";
+    } else {
+        const percentage = progress.hasMore
+            ? Math.min(
+                  90,
+                  Math.round(
+                      (progress.totalProducts /
+                          (progress.totalProducts * 1.1)) *
+                          100,
+                  ),
+              )
+            : 100;
+        progFill.style.width = percentage + "%";
+        statusText.innerText = `Fetching page ${progress.page}... (${progress.totalProducts} products downloaded)`;
+    }
+});
+
+// Wait for DOM to be ready before accessing elements
+document.addEventListener("DOMContentLoaded", () => {
+    // Restore shop settings
+    const pathDisplay = document.getElementById("pathDisplay");
+    const shopUrl = document.getElementById("shopUrl");
+    const apiKey = document.getElementById("apiKey");
+    const metafields = document.getElementById("metafields");
+    const shipHandles = document.getElementById("shipHandles");
+    const shipVariantIds = document.getElementById("shipVariantIds");
+
+    if (pathDisplay) pathDisplay.value = selectedPath;
+    if (shopUrl) shopUrl.value = localStorage.getItem("lastShop") || "";
+    if (apiKey) apiKey.value = localStorage.getItem("lastKey") || "";
+    if (metafields)
+        metafields.value = localStorage.getItem("lastMetafields") || "";
+    if (shipHandles)
+        shipHandles.value = localStorage.getItem("shipHandles") || "";
+    if (shipVariantIds)
+        shipVariantIds.value = localStorage.getItem("shipVariantIds") || "";
+
+    // Restore 5 address rows — migrate legacy single-address keys if needed
     const saved = JSON.parse(localStorage.getItem("shipAddresses") || "null");
     if (saved) {
         saved.forEach((addr, i) => {
@@ -43,18 +79,23 @@ document.getElementById("shipVariantIds").value =
         // Migrate old single-address keys to row 0
         const old1 = localStorage.getItem("shipAddress1");
         if (old1) {
-            document.getElementById("addrAddress1_0").value = old1;
-            document.getElementById("addrCity_0").value =
-                localStorage.getItem("shipCity") || "";
-            document.getElementById("addrProvince_0").value =
-                localStorage.getItem("shipProvince") || "";
-            document.getElementById("addrZip_0").value =
-                localStorage.getItem("shipZip") || "";
-            document.getElementById("addrCountry_0").value =
-                localStorage.getItem("shipCountryCode") || "";
+            const el1 = document.getElementById("addrAddress1_0");
+            const el2 = document.getElementById("addrCity_0");
+            const el3 = document.getElementById("addrProvince_0");
+            const el4 = document.getElementById("addrZip_0");
+            const el5 = document.getElementById("addrCountry_0");
+            if (el1) el1.value = old1;
+            if (el2) el2.value = localStorage.getItem("shipCity") || "";
+            if (el3) el3.value = localStorage.getItem("shipProvince") || "";
+            if (el4) el4.value = localStorage.getItem("shipZip") || "";
+            if (el5) el5.value = localStorage.getItem("shipCountryCode") || "";
         }
     }
-})();
+
+    // Restore input mode toggle
+    const _savedInputMode = localStorage.getItem("shipInputMode") || "handles";
+    setShippingInputMode(_savedInputMode);
+});
 
 function toggleAllAddresses() {
     const checks = [0, 1, 2, 3, 4].map((i) =>
@@ -68,10 +109,6 @@ function toggleAllAddresses() {
         ? "Select All"
         : "Deselect All";
 }
-
-// Restore input mode toggle
-const _savedInputMode = localStorage.getItem("shipInputMode") || "handles";
-setShippingInputMode(_savedInputMode);
 
 function setShippingInputMode(mode) {
     const handlesArea = document.getElementById("shipHandles");
@@ -235,6 +272,12 @@ async function cleanupLibrary() {
             "Are you sure you want to clean up unused images?\n\nThis will permanently delete any image files in the current folder that are not referenced by the loaded product library. This cannot be undone.",
         )
     ) {
+        // User cancelled - restore focus
+        setTimeout(() => {
+            window.focus();
+            const searchInput = document.getElementById("libSearch");
+            if (searchInput) searchInput.focus();
+        }, 50);
         return;
     }
 
@@ -255,9 +298,31 @@ async function cleanupLibrary() {
         );
         // Refresh library to verify
         loadLocalLibrary(true);
+
+        // Restore focus to window and search input after alert closes
+        // Use setTimeout to ensure dialog is fully closed and focus is returned to OS
+        setTimeout(() => {
+            // Force window focus first
+            window.focus();
+            // Then focus the search input
+            const searchInput = document.getElementById("libSearch");
+            if (searchInput) {
+                searchInput.focus();
+                // Also select any existing text for convenience
+                searchInput.select();
+            }
+        }, 50);
     } catch (e) {
         console.error("Cleanup Error:", e);
         alert("Error during cleanup: " + e.message);
+        // Restore focus after error alert too
+        setTimeout(() => {
+            window.focus();
+            const searchInput = document.getElementById("libSearch");
+            if (searchInput) {
+                searchInput.focus();
+            }
+        }, 50);
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -314,7 +379,7 @@ function toggleMediaType(type) {
     activeMediaType = type;
     localStorage.setItem("activeMediaType", type);
 
-    // Update button styles
+    // Update button styles using classList instead of inline styles
     const buttons = {
         all: document.getElementById("mediaTypeAll"),
         main: document.getElementById("mediaTypeMain"),
@@ -322,20 +387,16 @@ function toggleMediaType(type) {
         extra: document.getElementById("mediaTypeExtra"),
     };
 
-    // Reset all buttons to inactive state
+    // Remove active class from all buttons
     Object.values(buttons).forEach((btn) => {
         if (btn) {
-            btn.style.background = "#f1f2f3";
-            btn.style.color = "#333";
-            btn.style.borderColor = "#ccc";
+            btn.classList.remove("active");
         }
     });
 
-    // Set active button style
+    // Add active class to the selected button
     if (buttons[type]) {
-        buttons[type].style.background = "#008060";
-        buttons[type].style.color = "white";
-        buttons[type].style.borderColor = "#008060";
+        buttons[type].classList.add("active");
     }
 
     // Re-render the gallery with the new filter
@@ -351,20 +412,16 @@ function initMediaTypeButtons() {
         extra: document.getElementById("mediaTypeExtra"),
     };
 
-    // Reset all buttons
+    // Remove active class from all buttons
     Object.values(buttons).forEach((btn) => {
         if (btn) {
-            btn.style.background = "#f1f2f3";
-            btn.style.color = "#333";
-            btn.style.borderColor = "#ccc";
+            btn.classList.remove("active");
         }
     });
 
-    // Set active button based on saved state
+    // Add active class to the saved button state
     if (buttons[activeMediaType]) {
-        buttons[activeMediaType].style.background = "#008060";
-        buttons[activeMediaType].style.color = "white";
-        buttons[activeMediaType].style.borderColor = "#008060";
+        buttons[activeMediaType].classList.add("active");
     }
 }
 
@@ -775,6 +832,27 @@ function renderGallery(products, containerId, showAll = false) {
             }
 
             header.innerHTML = metaHtml;
+
+            // Add per-product folder opener for quick access in Explorer.
+            const folderPath =
+                prod.folderPath ||
+                (Array.isArray(prod.media) && prod.media.length > 0
+                    ? path.dirname(prod.media[0].src)
+                    : "");
+            const openFolderBtn = document.createElement("button");
+            openFolderBtn.className = "product-open-folder-btn";
+            openFolderBtn.type = "button";
+            openFolderBtn.textContent = "📂";
+            openFolderBtn.title = folderPath
+                ? `Open folder in Explorer\n${folderPath}`
+                : "Folder path unavailable";
+            openFolderBtn.disabled = !folderPath;
+            openFolderBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (folderPath) openProductFolder(folderPath);
+            });
+            header.appendChild(openFolderBtn);
+
             row.appendChild(header);
 
             // Media Grid
@@ -1002,15 +1080,163 @@ function debounce(func, wait) {
     };
 }
 
-// Attach debounced search listener
-const searchInput = document.getElementById("libSearch");
-if (searchInput) {
-    searchInput.addEventListener(
-        "keyup",
-        debounce(() => {
+// ============ EXPORT FUNCTIONS ============
+
+async function testExportProducts() {
+    const shopUrl = document.getElementById("shopUrl").value.trim();
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const metafields = document.getElementById("metafields").value.trim();
+
+    if (!shopUrl || !apiKey) {
+        return alert("Please fill in Shop URL and API Token first.");
+    }
+
+    const testBtn = document.getElementById("testExportBtn");
+    const origText = testBtn.innerText;
+    testBtn.disabled = true;
+    testBtn.innerText = "Testing...";
+
+    try {
+        const result = await ipcRenderer.invoke("test-export-products", {
+            shopUrl,
+            apiKey,
+            metafields,
+        });
+
+        // Display results
+        const resultsDiv = document.getElementById("exportTestResults");
+        const contentDiv = document.getElementById("exportTestContent");
+
+        contentDiv.textContent = JSON.stringify(result, null, 2);
+        resultsDiv.style.display = "block";
+
+        console.log("Export test result:", result);
+    } catch (e) {
+        console.error("Export test error:", e);
+        alert("Error during export test: " + e.message);
+    } finally {
+        testBtn.disabled = false;
+        testBtn.innerText = origText;
+    }
+}
+
+async function exportAllProducts() {
+    const shopUrl = document.getElementById("shopUrl").value.trim();
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const metafields = document.getElementById("metafields").value.trim();
+
+    if (!shopUrl || !apiKey) {
+        return alert("Please fill in Shop URL and API Token first.");
+    }
+
+    if (
+        !confirm(
+            "This will export all products from your store to a CSV file. This may take a few minutes depending on your product count. Continue?",
+        )
+    ) {
+        return;
+    }
+
+    const exportBtn = document.getElementById("exportBtn");
+    const progFill = document.getElementById("progFill");
+    const statusText = document.getElementById("statusText");
+    const progressArea = document.getElementById("progressArea");
+
+    const origText = exportBtn.innerText;
+    exportBtn.disabled = true;
+    exportBtn.innerText = "Exporting...";
+
+    // Show progress area
+    progressArea.style.display = "block";
+    progFill.style.width = "5%";
+    statusText.innerText = "Starting export...";
+
+    try {
+        const result = await ipcRenderer.invoke("export-all-products", {
+            shopUrl,
+            apiKey,
+            metafields,
+        });
+
+        if (result.action === "cancelled") {
+            statusText.innerText = "Export cancelled.";
+            progFill.style.width = "0%";
+            return;
+        }
+
+        progFill.style.width = "100%";
+        statusText.innerText = `✓ Export Complete! ${result.productCount} products exported.`;
+
+        if (result.action === "copied") {
+            alert(
+                `Export Complete!\n${result.productCount} products copied to clipboard.\n\nPaste directly into Excel or Google Sheets.`,
+            );
+        } else {
+            alert(
+                `Export Complete!\nFile saved to:\n${result.filepath}\n\nProducts exported: ${result.productCount}`,
+            );
+        }
+        console.log("Export result:", result);
+
+        // Hide progress after 2 seconds
+        setTimeout(() => {
+            progressArea.style.display = "none";
+        }, 2000);
+    } catch (e) {
+        console.error("Export error:", e);
+        statusText.innerText = `ERROR: ${e.message}`;
+        progFill.style.width = "0%";
+        alert("Error during export: " + e.message);
+
+        // Hide progress after 3 seconds
+        setTimeout(() => {
+            progressArea.style.display = "none";
+        }, 3000);
+    } finally {
+        exportBtn.disabled = false;
+        exportBtn.innerText = origText;
+    }
+}
+
+function copyExportTestResults() {
+    const content = document.getElementById("exportTestContent").textContent;
+    navigator.clipboard
+        .writeText(content)
+        .then(() => {
+            alert("Test results copied to clipboard!");
+        })
+        .catch((err) => {
+            console.error("Failed to copy:", err);
+            alert("Failed to copy to clipboard");
+        });
+}
+
+// Initialize search listener after DOM is fully loaded
+function initSearchListener() {
+    const searchInput = document.getElementById("libSearch");
+    if (searchInput) {
+        // Use change and keyup events for better reliability
+        const debouncedFilter = debounce(() => {
             filterLibrary();
-        }, 400),
-    );
+        }, 300);
+
+        searchInput.addEventListener("input", debouncedFilter);
+        searchInput.addEventListener("keyup", debouncedFilter);
+
+        // Also accept Enter key for immediate search
+        searchInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                filterLibrary();
+            }
+        });
+    }
+}
+
+// Attach search listener after DOM is loaded
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initSearchListener);
+} else {
+    initSearchListener();
 }
 
 let _shippingRows = [];
