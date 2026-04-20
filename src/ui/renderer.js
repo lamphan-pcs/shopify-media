@@ -6,7 +6,146 @@ let activeMediaType = localStorage.getItem("activeMediaType") || "all";
 
 // Pending image reorders: { [handle]: { productId, moves: [{id, newPosition}] } }
 let pendingReorders = {};
-const _dnd = { srcEl: null };
+let pendingRemovals = {};
+let deleteMode = false;
+const _dnd = { srcEl: null, srcHandle: null };
+
+// ── Touch-to-DnD bridge ──────────────────────────────────────────────────────
+// Converts touchstart/touchmove/touchend into synthetic drag events.
+// Fires events on the EXACT element under the finger so that the drop handler's
+// e.target.closest(".dnd-card") resolves correctly.
+(function installTouchDnd() {
+    let _touchSrc = null;
+    let _touchClone = null;
+    let _cloneW = 0;
+    let _cloneH = 0;
+
+    const elAt = (touch, hideEl) => {
+        if (hideEl) hideEl.style.visibility = "hidden";
+        const el = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (hideEl) hideEl.style.visibility = "";
+        return el;
+    };
+
+    const fireDrag = (type, target, touch) => {
+        const init = { bubbles: true, cancelable: true };
+        if (touch) {
+            init.clientX = touch.clientX;
+            init.clientY = touch.clientY;
+        }
+        try {
+            target.dispatchEvent(new DragEvent(type, init));
+        } catch (_) {
+            target.dispatchEvent(
+                new Event(type, { bubbles: true, cancelable: true }),
+            );
+        }
+    };
+
+    document.addEventListener(
+        "touchstart",
+        (e) => {
+            const card = e.target.closest && e.target.closest(".dnd-card");
+            if (!card || !card.draggable) return;
+
+            // In delete mode, let the tap fall through as a normal click — no drag.
+            if (deleteMode) return;
+
+            // Also check non-dnd-card removable cards
+            const mediaCard =
+                e.target.closest && e.target.closest(".media-card");
+            if (
+                mediaCard &&
+                !mediaCard.classList.contains("dnd-card") &&
+                deleteMode
+            )
+                return;
+
+            _touchSrc = card;
+            const rect = card.getBoundingClientRect();
+            _cloneW = rect.width;
+            _cloneH = rect.height;
+            _touchClone = card.cloneNode(true);
+            _touchClone.style.cssText = [
+                "position:fixed",
+                "pointer-events:none",
+                "z-index:9999",
+                "opacity:0.72",
+                `width:${_cloneW}px`,
+                `height:${_cloneH}px`,
+                `left:${rect.left}px`,
+                `top:${rect.top}px`,
+                "border:2px dashed #008060",
+                "border-radius:4px",
+                "transition:none",
+                "visibility:visible",
+            ].join(";");
+            document.body.appendChild(_touchClone);
+            fireDrag("dragstart", card, e.touches[0]);
+            e.preventDefault();
+        },
+        { passive: false },
+    );
+
+    document.addEventListener(
+        "touchmove",
+        (e) => {
+            if (!_touchSrc) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+
+            // Move ghost
+            _touchClone.style.left = `${touch.clientX - _cloneW / 2}px`;
+            _touchClone.style.top = `${touch.clientY - _cloneH / 2}px`;
+
+            // Find element under finger — prefer a .dnd-card, fall back to rowDiv
+            const under = elAt(touch, _touchClone);
+            const cardUnder =
+                under && under.closest && under.closest(".dnd-card");
+            const rowUnder =
+                under && under.closest && under.closest("[data-dnd-group]");
+            const fireTarget = cardUnder || rowUnder;
+            if (fireTarget) fireDrag("dragover", fireTarget, touch);
+        },
+        { passive: false },
+    );
+
+    document.addEventListener("touchend", (e) => {
+        if (!_touchSrc) return;
+        const touch = e.changedTouches[0];
+        const src = _touchSrc;
+
+        // Remove ghost before hit-testing
+        if (_touchClone) {
+            document.body.removeChild(_touchClone);
+            _touchClone = null;
+        }
+
+        const under = elAt(touch);
+        const cardUnder = under && under.closest && under.closest(".dnd-card");
+        const rowUnder =
+            under && under.closest && under.closest("[data-dnd-group]");
+
+        // Fire drop on the most precise target — card bubbles up to rowDiv
+        const dropTarget = cardUnder || rowUnder;
+        if (dropTarget) fireDrag("drop", dropTarget, touch);
+        fireDrag("dragend", src, touch);
+
+        _touchSrc = null;
+    });
+
+    document.addEventListener("touchcancel", () => {
+        if (_touchClone) {
+            document.body.removeChild(_touchClone);
+            _touchClone = null;
+        }
+        if (_touchSrc) {
+            fireDrag("dragend", _touchSrc, null);
+            _touchSrc = null;
+        }
+    });
+})();
+// ────────────────────────────────────────────────────────────────────────────
 
 let selectedPath = localStorage.getItem("lastPath") || "";
 
@@ -195,6 +334,12 @@ function switchTab(tabName) {
         }
 
         // 5. Trigger Logic
+        // Show/hide floating panel
+        const floatingPanel = document.getElementById("floatingLibraryPanel");
+        if (floatingPanel) {
+            floatingPanel.classList.toggle("visible", tabName === "library");
+        }
+
         if (tabName === "library") {
             // Slight delay to ensure DOM is painted
             setTimeout(() => {
@@ -341,6 +486,8 @@ function filterLibrary() {
         // 1. Matches Search Text
         const matchesText =
             (p.title && p.title.toLowerCase().includes(query)) ||
+            (p.productName && p.productName.toLowerCase().includes(query)) ||
+            (p.folderName && p.folderName.toLowerCase().includes(query)) ||
             (p.handle && p.handle.toLowerCase().includes(query)) ||
             (p.sku && p.sku.toLowerCase().includes(query)) ||
             (p.tags && p.tags.some((t) => t.toLowerCase().includes(query)));
@@ -443,12 +590,216 @@ function updateReorderBar() {
         bar.style.display = "none";
     } else {
         bar.style.display = "flex";
-        if (msg)
-            msg.textContent = `${count} product${count !== 1 ? "s" : ""} with reordered images — push to apply on Shopify`;
+        if (msg) {
+            const handles = Object.keys(pendingReorders);
+            const preview = handles.slice(0, 4).join(", ");
+            const extra =
+                handles.length > 4 ? ` +${handles.length - 4} more` : "";
+            msg.textContent = `${count} product${count !== 1 ? "s" : ""} to be changed: ${preview}${extra}`;
+        }
+    }
+    updateDeleteModeButton();
+    // Sync floating push button
+    const floatBtn = document.getElementById("floatPushBtn");
+    if (floatBtn) {
+        const hasRemovals = Object.keys(pendingRemovals).length > 0;
+        if (!hasRemovals) {
+            if (count > 0) {
+                floatBtn.disabled = false;
+                floatBtn.textContent = `↑ Push (${count})`;
+            } else {
+                floatBtn.disabled = true;
+                floatBtn.textContent = "↑ Push to Shopify";
+            }
+        }
+    }
+}
+
+function getMediaLayoutKey(media) {
+    return (
+        media.shopifyFileId || media.shopifyId || media.src || media.filename
+    );
+}
+
+function normalizeLayout(layout) {
+    const normalized = {
+        main: [...(layout.main || [])],
+        banner: [...(layout.banner || [])],
+        extra: [...(layout.extra || [])],
+        other: [...(layout.other || [])],
+    };
+
+    if (normalized.banner.length > 1) {
+        const overflow = normalized.banner.slice(1);
+        normalized.banner = normalized.banner.slice(0, 1);
+        normalized.extra = [...overflow, ...normalized.extra];
+    }
+
+    return normalized;
+}
+
+function buildOriginalLayout(prod) {
+    const groups = { main: [], banner: [], extra: [], other: [] };
+    const sourceMedia = Array.isArray(prod.media) ? [...prod.media] : [];
+
+    sourceMedia.sort((a, b) => {
+        if ((a.group || "") === "main" && (b.group || "") === "main") {
+            return (a.position || 0) - (b.position || 0);
+        }
+        return 0;
+    });
+
+    sourceMedia.forEach((media) => {
+        let group = media.group || "other";
+        if (!groups[group]) group = "other";
+        groups[group].push(getMediaLayoutKey(media));
+    });
+
+    return normalizeLayout(groups);
+}
+
+function getLayoutItemMap(prod) {
+    const map = new Map();
+    (prod.media || []).forEach((media) => {
+        map.set(getMediaLayoutKey(media), media);
+    });
+    return map;
+}
+
+function getDisplayLayout(prod) {
+    const itemMap = getLayoutItemMap(prod);
+    const storedLayout = pendingReorders[prod.handle]?.layout;
+    const layout = storedLayout || buildOriginalLayout(prod);
+    const display = { main: [], banner: [], extra: [], other: [] };
+    const used = new Set();
+
+    ["main", "banner", "extra", "other"].forEach((group) => {
+        (layout[group] || []).forEach((key) => {
+            const item = itemMap.get(key);
+            // Guard: a key that already appeared in an earlier group is not duplicated
+            if (item && !used.has(key)) {
+                display[group].push(item);
+                used.add(key);
+            }
+        });
+    });
+
+    (prod.media || []).forEach((media) => {
+        const key = getMediaLayoutKey(media);
+        if (!used.has(key)) {
+            const group =
+                media.group && display[media.group] ? media.group : "other";
+            display[group].push(media);
+            used.add(key);
+        }
+    });
+
+    return display;
+}
+
+function layoutsEqual(left, right) {
+    const groups = ["main", "banner", "extra", "other"];
+    return groups.every((group) => {
+        const leftItems = left[group] || [];
+        const rightItems = right[group] || [];
+        return (
+            leftItems.length === rightItems.length &&
+            leftItems.every((item, index) => item === rightItems[index])
+        );
+    });
+}
+
+function buildLayoutPayload(prod, layout) {
+    const itemMap = getLayoutItemMap(prod);
+    const toPayload = (key) => {
+        const item = itemMap.get(key);
+        if (!item) return null;
+        const fileId = item.shopifyId || item.shopifyFileId || "";
+        return {
+            key,
+            fileId,
+            mediaId: item.shopifyId || fileId,
+            filename: item.filename || "",
+            type: item.type || "image",
+        };
+    };
+
+    return {
+        main: (layout.main || []).map(toPayload).filter(Boolean),
+        banner: (layout.banner || []).map(toPayload).filter(Boolean),
+        extra: (layout.extra || []).map(toPayload).filter(Boolean),
+    };
+}
+
+function applyPendingLayoutToCachedProduct(handle, layout) {
+    const product = cachedLibrary.find((item) => item.handle === handle);
+    if (!product || !Array.isArray(product.media)) return;
+
+    const itemMap = getLayoutItemMap(product);
+    const groupAssignments = {};
+
+    ["main", "banner", "extra", "other"].forEach((group) => {
+        (layout[group] || []).forEach((key, index) => {
+            groupAssignments[key] = {
+                group,
+                position: group === "main" ? index + 1 : index + 1,
+            };
+        });
+    });
+
+    product.media = product.media.map((media) => {
+        const key = getMediaLayoutKey(media);
+        const assignment = groupAssignments[key];
+        if (!assignment) return media;
+        return {
+            ...media,
+            group: assignment.group,
+            position: assignment.position,
+        };
+    });
+}
+
+function updateRemovalBar() {
+    const count = Object.keys(pendingRemovals).length;
+    const bar = document.getElementById("removalBar");
+    const msg = document.getElementById("removalBarMsg");
+    if (!bar) return;
+    if (count === 0) {
+        bar.style.display = "none";
+    } else {
+        bar.style.display = "flex";
+        const selectedCount = Object.values(pendingRemovals).reduce(
+            (sum, entry) => sum + (entry.images?.length || 0),
+            0,
+        );
+        if (msg) {
+            msg.textContent = `${selectedCount} image${selectedCount !== 1 ? "s" : ""} selected across ${count} product${count !== 1 ? "s" : ""} for removal`;
+        }
+    }
+    // Sync floating push button
+    const floatBtn = document.getElementById("floatPushBtn");
+    if (floatBtn) {
+        if (count > 0) {
+            const totalImages = Object.values(pendingRemovals).reduce(
+                (s, e) => s + (e.images?.length || 0),
+                0,
+            );
+            floatBtn.disabled = false;
+            floatBtn.textContent = `🗑 Remove (${totalImages})`;
+        } else {
+            // No removals — let updateReorderBar handle the button state
+            updateReorderBar();
+        }
     }
 }
 
 async function pushReordersToShopify() {
+    if (Object.keys(pendingRemovals).length > 0) {
+        return alert(
+            "Removal selections are active. Clear or apply removals before pushing reorders.",
+        );
+    }
+
     const shopUrl = document.getElementById("shopUrl").value.trim();
     const apiKey = document.getElementById("apiKey").value.trim();
     if (!shopUrl || !apiKey) {
@@ -459,55 +810,44 @@ async function pushReordersToShopify() {
     const handles = Object.keys(pendingReorders);
     if (handles.length === 0) return;
 
-    // Check if any productIds are missing and fetch them
-    const missingHandles = handles.filter((h) => !pendingReorders[h].productId);
-    if (missingHandles.length > 0) {
-        const btn = document.getElementById("pushReordersBtn");
-        if (btn) btn.textContent = `Fetching IDs…`;
-
-        try {
-            for (const h of missingHandles) {
-                const id = await ipcRenderer.invoke("fetch-product-id", {
-                    shopUrl,
-                    apiKey,
-                    handle: h,
-                });
-                if (id) {
-                    pendingReorders[h].productId = id;
-                }
-            }
-        } catch (err) {
-            showCopyableError(
-                "Error Fetching Product IDs",
-                err.message || String(err),
-            );
-            if (btn) btn.textContent = "Push to Shopify";
-            return;
-        }
+    if (
+        !confirm(
+            `Bulk update will apply layout changes to:\n\n${handles.map((h) => `• ${h}`).join("\n")}`,
+        )
+    ) {
+        return;
     }
 
     const reorders = handles.map((h) => ({
         handle: h,
-        productId: pendingReorders[h].productId,
-        moves: pendingReorders[h].moves,
+        layout: pendingReorders[h].payload,
     }));
 
     const btn = document.getElementById("pushReordersBtn");
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = `Pushing ${handles.length}…`;
-    }
+    const floatBtn = document.getElementById("floatPushBtn");
+    const allPushBtns = [btn, floatBtn].filter(Boolean);
+    allPushBtns.forEach((b) => {
+        b.disabled = true;
+        b.textContent = `Pushing ${handles.length}…`;
+    });
 
     try {
         const results = await ipcRenderer.invoke("reorder-product-media", {
             shopUrl,
             apiKey,
+            metafields: document.getElementById("metafields").value.trim(),
             reorders,
         });
         const failed = results.filter((r) => !r.success);
         const succeeded = results.filter((r) => r.success);
 
         succeeded.forEach((r) => {
+            if (pendingReorders[r.handle]?.layout) {
+                applyPendingLayoutToCachedProduct(
+                    r.handle,
+                    pendingReorders[r.handle].layout,
+                );
+            }
             delete pendingReorders[r.handle];
             const productRow = document.querySelector(
                 `[data-product-handle="${r.handle}"]`,
@@ -523,6 +863,15 @@ async function pushReordersToShopify() {
         if (failed.length > 0) {
             const errorText = `${succeeded.length} reorder(s) pushed.\n\n${failed.length} failed:\n${failed.map((r) => `• ${r.handle}: ${r.error}`).join("\n")}`;
             showCopyableError("Reorder Partially Failed", errorText);
+        } else if (succeeded.length > 0) {
+            showCopyableError(
+                "Reorder Applied",
+                `Changed products:\n${succeeded.map((r) => `• ${r.handle}`).join("\n")}`,
+            );
+        }
+
+        if (succeeded.length > 0) {
+            filterLibrary();
         }
     } catch (err) {
         showCopyableError("Reorder Failed", err.message || String(err));
@@ -541,6 +890,209 @@ function discardReorders() {
         el.style.outline = "";
     });
     updateReorderBar();
+    filterLibrary();
+}
+
+function floatPushToShopify() {
+    if (Object.keys(pendingRemovals).length > 0) {
+        pushRemovalsToShopify();
+    } else {
+        pushReordersToShopify();
+    }
+}
+
+function resetProductChanges(handle) {
+    if (!handle) return;
+
+    delete pendingReorders[handle];
+    delete pendingRemovals[handle];
+
+    updateReorderBar();
+    updateRemovalBar();
+    filterLibrary();
+}
+
+function updateDeleteModeButton() {
+    const reorderActive = Object.keys(pendingReorders).length > 0;
+    // Floating panel delete button
+    const floatBtn = document.getElementById("floatDeleteBtn");
+    if (floatBtn) {
+        if (reorderActive) {
+            floatBtn.textContent = "🗑 Delete: OFF";
+            floatBtn.classList.remove("active");
+            floatBtn.disabled = true;
+        } else {
+            floatBtn.textContent = deleteMode
+                ? "🗑 Delete: ON"
+                : "🗑 Delete: OFF";
+            floatBtn.classList.toggle("active", deleteMode);
+            floatBtn.disabled = false;
+        }
+    }
+    document.querySelectorAll(".media-card").forEach((card) => {
+        if (card.dataset.removable === "true") {
+            const canDragCard = card.classList.contains("dnd-card");
+            card.style.cursor = deleteMode
+                ? "pointer"
+                : canDragCard
+                  ? "grab"
+                  : "default";
+        }
+    });
+}
+
+function toggleDeleteMode() {
+    if (Object.keys(pendingReorders).length > 0) {
+        alert(
+            "Reorder changes are active. Clear or push those before entering delete mode.",
+        );
+        return;
+    }
+    deleteMode = !deleteMode;
+    updateDeleteModeButton();
+}
+
+function togglePendingRemoval(handle, folderPath, image, checked) {
+    if (Object.keys(pendingReorders).length > 0) {
+        alert(
+            "Reorder changes are active. Clear or push those before selecting images to remove.",
+        );
+        return false;
+    }
+
+    if (!pendingRemovals[handle]) {
+        pendingRemovals[handle] = {
+            folderPath,
+            images: [],
+        };
+    }
+
+    const entry = pendingRemovals[handle];
+    // Include group in key so the same file used in different slots is tracked independently
+    const key = `${image.group || ""}:${image.src || image.filename}`;
+    const imageKey = (item) =>
+        `${item.group || ""}:${item.src || item.filename}`;
+
+    if (checked) {
+        if (!entry.images.some((item) => imageKey(item) === key)) {
+            entry.images.push({
+                src: image.src,
+                filename: image.filename,
+                mediaId: image.shopifyId || "",
+                fileId: image.shopifyFileId || "",
+                group: image.group || "",
+            });
+        }
+    } else {
+        entry.images = entry.images.filter((item) => imageKey(item) !== key);
+        if (entry.images.length === 0) {
+            delete pendingRemovals[handle];
+        }
+    }
+
+    const productRow = document.querySelector(
+        `[data-product-handle="${handle}"]`,
+    );
+    if (productRow && !pendingReorders[handle]) {
+        productRow.style.outline = pendingRemovals[handle]
+            ? "2px solid #d32f2f"
+            : "";
+    }
+    updateRemovalBar();
+    return true;
+}
+
+async function pushRemovalsToShopify() {
+    if (Object.keys(pendingReorders).length > 0) {
+        return alert(
+            "Reorder changes are active. Clear or push those before removing images.",
+        );
+    }
+
+    const shopUrl = document.getElementById("shopUrl").value.trim();
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const metafields = document.getElementById("metafields").value.trim();
+    if (!shopUrl || !apiKey) {
+        return alert(
+            "Please fill in Shop URL and API Token on the Sync Dashboard tab first.",
+        );
+    }
+
+    const removals = Object.entries(pendingRemovals).map(([handle, entry]) => ({
+        handle,
+        folderPath: entry.folderPath,
+        images: entry.images,
+    }));
+
+    if (removals.length === 0) return;
+
+    if (
+        !confirm(
+            `Remove ${removals.reduce((sum, item) => sum + item.images.length, 0)} selected image(s) from Shopify and related metafields? This cannot be undone.`,
+        )
+    ) {
+        return;
+    }
+
+    const btn = document.getElementById("pushRemovalsBtn");
+    const floatBtn = document.getElementById("floatPushBtn");
+    const totalImages = removals.reduce(
+        (sum, item) => sum + item.images.length,
+        0,
+    );
+    [btn, floatBtn].filter(Boolean).forEach((b) => {
+        b.disabled = true;
+        b.textContent = `Removing ${totalImages}…`;
+    });
+
+    try {
+        const results = await ipcRenderer.invoke("remove-product-images", {
+            shopUrl,
+            apiKey,
+            metafields,
+            removals,
+        });
+
+        const failed = results.filter((r) => !r.success);
+        const succeeded = results.filter((r) => r.success);
+
+        succeeded.forEach((r) => {
+            delete pendingRemovals[r.handle];
+        });
+
+        if (failed.length > 0) {
+            const errorText = `${succeeded.length} removal(s) applied.\n\n${failed.length} failed:\n${failed.map((r) => `• ${r.handle}: ${r.error}`).join("\n")}`;
+            showCopyableError("Removal Partially Failed", errorText);
+        }
+
+        if (succeeded.length > 0) {
+            await loadLocalLibrary(true);
+        }
+    } catch (err) {
+        showCopyableError("Removal Failed", err.message || String(err));
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Remove from Shopify";
+        }
+        updateRemovalBar();
+    }
+}
+
+function discardRemovals() {
+    pendingRemovals = {};
+    document.querySelectorAll("[data-product-handle]").forEach((el) => {
+        if (!pendingReorders[el.dataset.productHandle]) {
+            el.style.outline = "";
+        }
+    });
+    document
+        .querySelectorAll(".media-remove-checkbox")
+        .forEach((checkbox) => (checkbox.checked = false));
+    document
+        .querySelectorAll(".media-card-remove-selected")
+        .forEach((card) => card.classList.remove("media-card-remove-selected"));
+    updateRemovalBar();
 }
 
 // --- Copyable Error Modal ---
@@ -758,13 +1310,7 @@ function renderGallery(products, containerId, showAll = false) {
 
     // Clear and add debug header
     let headerAction = "";
-    if (containerId === "fullLibraryArea") {
-        headerAction = `<div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.3);">
-            <button id="cleanupBtn" onclick="cleanupLibrary()" style="padding:8px 15px; background:#d32f2f; color:white; border:none; border-radius:3px; cursor:pointer; font-weight:bold; font-size: 13px;">
-                🗑 Clean Up Unused Images
-            </button>
-        </div>`;
-    }
+    // Buttons are in the floating panel; no inline header buttons needed.
 
     container.innerHTML = `
         <div style="padding:15px; background:#4caf50; color:white; margin-bottom:15px; border-radius:4px;">
@@ -774,10 +1320,13 @@ function renderGallery(products, containerId, showAll = false) {
             ${headerAction}
         </div>
     `;
+    updateDeleteModeButton();
 
     if (!products || products.length === 0) {
         container.innerHTML +=
             '<div style="padding:20px; text-align:center; color:#666; background:white; border:1px solid #ddd;">No products found in this folder. Make sure you selected the correct download path.</div>';
+        updateReorderBar();
+        updateRemovalBar();
         return;
     }
 
@@ -812,6 +1361,9 @@ function renderGallery(products, containerId, showAll = false) {
             row.style.cssText =
                 "background:white; border:1px solid #e1e3e5; margin-bottom:15px; border-radius:8px; padding:15px;";
             row.dataset.productHandle = prod.handle;
+            if (pendingReorders[prod.handle]) {
+                row.style.outline = "2px solid #ff9800";
+            }
 
             // Header
             const header = document.createElement("div");
@@ -819,15 +1371,27 @@ function renderGallery(products, containerId, showAll = false) {
                 "display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:10px;";
 
             // Build Meta Info
-            let metaHtml = `<div style="font-size:1.1em; font-weight:bold;">${
-                prod.title || prod.handle || "Unknown Product"
-            }</div>`;
+            const displayTitle =
+                prod.title ||
+                prod.productName ||
+                prod.handle ||
+                "Unknown Product";
+            const displayFolder =
+                prod.folderName ||
+                (prod.folderPath
+                    ? path.basename(prod.folderPath)
+                    : prod.handle || "");
+
+            let metaHtml = `<div style="font-size:1.1em; font-weight:bold;">${displayTitle}</div>`;
+            if (displayFolder) {
+                metaHtml += `<div style="font-size:0.9em; color:#777; margin-top:4px;">${displayFolder}</div>`;
+            }
 
             if (prod.sku || prod.category) {
-                metaHtml += `<div style="font-size:0.85em; color:#666; margin-top:4px;">`;
+                metaHtml += `<div style="font-size:0.85em; color:#666; margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">`;
                 if (prod.sku) metaHtml += `<span>SKU: ${prod.sku}</span>`;
                 if (prod.category)
-                    metaHtml += `<span style="margin-left:10px; background:#e1f5fe; color:#0277bd; padding:2px 6px; border-radius:4px; font-size:0.9em;">${prod.category}</span>`;
+                    metaHtml += `<span style="margin-left:0; background:#e1f5fe; color:#0277bd; padding:2px 6px; border-radius:4px; font-size:0.9em;">${prod.category}</span>`;
                 metaHtml += `</div>`;
             }
 
@@ -851,7 +1415,23 @@ function renderGallery(products, containerId, showAll = false) {
                 e.stopPropagation();
                 if (folderPath) openProductFolder(folderPath);
             });
-            header.appendChild(openFolderBtn);
+
+            const resetBtn = document.createElement("button");
+            resetBtn.className = "product-reset-btn";
+            resetBtn.type = "button";
+            resetBtn.textContent = "↺";
+            resetBtn.title =
+                "Reset pending reorder and removal selections for this product";
+            resetBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                resetProductChanges(prod.handle);
+            });
+
+            const headerActions = document.createElement("div");
+            headerActions.className = "product-header-actions";
+            headerActions.appendChild(resetBtn);
+            headerActions.appendChild(openFolderBtn);
+            header.appendChild(headerActions);
 
             row.appendChild(header);
 
@@ -862,112 +1442,180 @@ function renderGallery(products, containerId, showAll = false) {
             const mainWrapper = grid; // Alias for internal logic
 
             if (prod.media && prod.media.length > 0) {
-                // Group items
-                const groups = { main: [], banner: [], extra: [], other: [] };
+                const groups = getDisplayLayout(prod);
+                const canDnd = true;
 
-                prod.media.forEach((m) => {
-                    let g = "other";
-                    if (m.group) g = m.group;
-                    else if (m.filename.startsWith("banner-")) g = "banner";
-                    else if (m.filename.startsWith("extra-")) g = "extra";
-                    else if (m.filename.startsWith("main-")) g = "main";
+                const collectCurrentLayout = () => {
+                    const baseLayout =
+                        pendingReorders[prod.handle]?.layout ||
+                        buildOriginalLayout(prod);
+                    const layout = {
+                        main: [...(baseLayout.main || [])],
+                        banner: [...(baseLayout.banner || [])],
+                        extra: [...(baseLayout.extra || [])],
+                        other: [...(baseLayout.other || [])],
+                    };
+                    row.querySelectorAll("[data-dnd-group]").forEach(
+                        (section) => {
+                            const group = section.dataset.dndGroup;
+                            layout[group] = [
+                                ...section.querySelectorAll(".dnd-card"),
+                            ].map((card) => card.dataset.layoutKey);
+                        },
+                    );
 
-                    if (!groups[g]) groups[g] = []; // Safety
-                    groups[g].push(m);
-                });
+                    return normalizeLayout(layout);
+                };
 
-                const canDnd = true; // Allow drag-drop for all synced products; IDs fetched on push
+                const syncPendingLayout = () => {
+                    const normalized = collectCurrentLayout();
+                    const original = buildOriginalLayout(prod);
 
-                const renderSection = (title, items, isDraggable = false) => {
-                    if (items.length === 0) return;
+                    if (layoutsEqual(original, normalized)) {
+                        delete pendingReorders[prod.handle];
+                        row.style.outline = "";
+                    } else {
+                        pendingReorders[prod.handle] = {
+                            layout: normalized,
+                            payload: buildLayoutPayload(prod, normalized),
+                        };
+                        row.style.outline = "2px solid #ff9800";
+                    }
+
+                    updateReorderBar();
+                };
+
+                const clearDropMarkers = () => {
+                    row.querySelectorAll(".dnd-card").forEach((card) => {
+                        card.style.outline = "";
+                    });
+                };
+
+                const renderSection = (
+                    groupName,
+                    title,
+                    items,
+                    isDraggable = false,
+                ) => {
+                    if (items.length === 0 && !isDraggable) return;
 
                     const sec = document.createElement("div");
                     const hint = isDraggable
-                        ? ' <span style="font-size:10px;color:#aaa;font-weight:400;margin-left:4px;">drag to reorder</span>'
+                        ? ' <span style="font-size:10px;color:#aaa;font-weight:400;margin-left:4px;">drag to reorder or move</span>'
                         : "";
                     sec.innerHTML = `<h5 style="margin:0 0 8px 0; color:#555; text-transform:uppercase; font-size:11px; letter-spacing:0.5px; border-bottom:1px solid #eee; padding-bottom:4px;">${title}${hint}</h5>`;
 
                     const rowDiv = document.createElement("div");
                     rowDiv.style.cssText =
                         "display:flex; flex-wrap:wrap; gap:10px;";
+                    rowDiv.dataset.dndGroup = groupName;
+
+                    if (isDraggable) {
+                        rowDiv.style.minHeight = "120px";
+                        rowDiv.style.padding = "6px";
+                        rowDiv.style.border = "1px dashed #d0d7de";
+                        rowDiv.style.borderRadius = "6px";
+                        rowDiv.style.background = "#fafafa";
+                    }
 
                     if (isDraggable && canDnd) {
-                        rowDiv.dataset.dndHandle = prod.handle;
-                        rowDiv.dataset.dndProductId = prod.shopifyId || ""; // Can be empty; fetched on push
-
                         rowDiv.addEventListener("dragover", (e) => {
                             e.preventDefault();
+                            if (Object.keys(pendingRemovals).length > 0) return;
                             const target =
                                 e.target.closest &&
                                 e.target.closest(".dnd-card");
+                            clearDropMarkers();
                             if (target && target !== _dnd.srcEl) {
-                                rowDiv
-                                    .querySelectorAll(".dnd-card")
-                                    .forEach((c) => {
-                                        c.style.outline = "";
-                                    });
                                 target.style.outline = "2px dashed #008060";
                             }
                         });
 
                         rowDiv.addEventListener("dragleave", (e) => {
                             if (!rowDiv.contains(e.relatedTarget)) {
-                                rowDiv
-                                    .querySelectorAll(".dnd-card")
-                                    .forEach((c) => {
-                                        c.style.outline = "";
-                                    });
+                                clearDropMarkers();
                             }
                         });
 
                         rowDiv.addEventListener("drop", (e) => {
                             e.preventDefault();
-                            rowDiv
-                                .querySelectorAll(".dnd-card")
-                                .forEach((c) => {
-                                    c.style.outline = "";
-                                });
-                            const dst =
+                            if (Object.keys(pendingRemovals).length > 0) {
+                                alert(
+                                    "Removal selections are active. Clear or apply removals before reordering images.",
+                                );
+                                return;
+                            }
+
+                            const bannerHasItem =
+                                rowDiv.dataset.dndGroup === "banner" &&
+                                rowDiv.querySelectorAll(".dnd-card").length >=
+                                    1;
+                            if (
+                                rowDiv.dataset.dndGroup === "banner" &&
+                                bannerHasItem &&
+                                _dnd.srcEl &&
+                                _dnd.srcEl.parentElement !== rowDiv
+                            ) {
+                                alert(
+                                    "Only one banner image is allowed. Move or remove the existing banner before placing another image there.",
+                                );
+                                clearDropMarkers();
+                                return;
+                            }
+
+                            clearDropMarkers();
+                            if (!_dnd.srcEl || _dnd.srcHandle !== prod.handle) {
+                                return;
+                            }
+
+                            let dst =
                                 e.target.closest &&
                                 e.target.closest(".dnd-card");
-                            if (
-                                !dst ||
-                                !_dnd.srcEl ||
-                                dst === _dnd.srcEl ||
-                                !rowDiv.contains(dst)
-                            )
-                                return;
 
-                            const srcIdx = [...rowDiv.children].indexOf(
-                                _dnd.srcEl,
-                            );
-                            const dstIdx = [...rowDiv.children].indexOf(dst);
-                            if (srcIdx < dstIdx)
-                                rowDiv.insertBefore(
-                                    _dnd.srcEl,
-                                    dst.nextSibling,
-                                );
-                            else rowDiv.insertBefore(_dnd.srcEl, dst);
-
-                            const handle = rowDiv.dataset.dndHandle;
-                            const productId = rowDiv.dataset.dndProductId;
-                            const moves = [
-                                ...rowDiv.querySelectorAll(".dnd-card"),
-                            ].map((c, i) => ({
-                                id: c.dataset.dndMediaId,
-                                newPosition: i,
-                            }));
-
-                            if (moves.length >= 2) {
-                                pendingReorders[handle] = { productId, moves };
-                                const productRow = document.querySelector(
-                                    `[data-product-handle="${handle}"]`,
-                                );
-                                if (productRow)
-                                    productRow.style.outline =
-                                        "2px solid #ff9800";
-                                updateReorderBar();
+                            // If no card was directly hit (e.g. touch landed between cards
+                            // or on the row background), find the nearest card by x position
+                            if (!dst && e.clientX) {
+                                const cards = [
+                                    ...rowDiv.querySelectorAll(".dnd-card"),
+                                ];
+                                let best = null,
+                                    bestDist = Infinity;
+                                cards.forEach((c) => {
+                                    const r = c.getBoundingClientRect();
+                                    const cx = r.left + r.width / 2;
+                                    const d = Math.abs(e.clientX - cx);
+                                    if (d < bestDist) {
+                                        bestDist = d;
+                                        best = c;
+                                    }
+                                });
+                                if (best) dst = best;
                             }
+
+                            if (
+                                dst &&
+                                dst !== _dnd.srcEl &&
+                                rowDiv.contains(dst)
+                            ) {
+                                const srcIdx = [...rowDiv.children].indexOf(
+                                    _dnd.srcEl,
+                                );
+                                const dstIdx = [...rowDiv.children].indexOf(
+                                    dst,
+                                );
+                                if (srcIdx < dstIdx) {
+                                    rowDiv.insertBefore(
+                                        _dnd.srcEl,
+                                        dst.nextSibling,
+                                    );
+                                } else {
+                                    rowDiv.insertBefore(_dnd.srcEl, dst);
+                                }
+                            } else {
+                                rowDiv.appendChild(_dnd.srcEl);
+                            }
+
+                            syncPendingLayout();
                         });
                     }
 
@@ -975,16 +1623,28 @@ function renderGallery(products, containerId, showAll = false) {
                         const card = document.createElement("div");
                         card.style.cssText =
                             "width:100px; height:100px; border:1px solid #ddd; border-radius:4px; overflow:hidden; position:relative; background:#f0f0f0;";
+                        card.classList.add("media-card");
 
-                        const hasSyncId =
-                            isDraggable && canDnd && !!m.shopifyId;
-                        if (isDraggable && canDnd) {
+                        const canDragItem =
+                            isDraggable &&
+                            canDnd &&
+                            m.type === "image" &&
+                            (!!m.shopifyId || !!m.shopifyFileId);
+                        if (canDragItem) {
                             card.draggable = true;
-                            card.dataset.dndMediaId = m.shopifyId || m.filename; // Use filename as fallback key
-                            card.style.cursor = "grab";
+                            card.dataset.layoutKey = getMediaLayoutKey(m);
+                            card.style.cursor = deleteMode ? "pointer" : "grab";
                             card.classList.add("dnd-card");
                             card.addEventListener("dragstart", (e) => {
+                                if (
+                                    deleteMode ||
+                                    Object.keys(pendingRemovals).length > 0
+                                ) {
+                                    e.preventDefault();
+                                    return;
+                                }
                                 _dnd.srcEl = card;
+                                _dnd.srcHandle = prod.handle;
                                 e.dataTransfer.effectAllowed = "move";
                                 setTimeout(() => {
                                     card.style.opacity = "0.4";
@@ -993,14 +1653,73 @@ function renderGallery(products, containerId, showAll = false) {
                             card.addEventListener("dragend", () => {
                                 card.style.opacity = "1";
                                 _dnd.srcEl = null;
+                                _dnd.srcHandle = null;
+                                clearDropMarkers();
                             });
                         }
 
+                        const canRemove =
+                            m.type === "image" &&
+                            (!!m.shopifyId || !!m.shopifyFileId);
+                        card.dataset.removable = canRemove ? "true" : "false";
+                        const removalKey = (item) =>
+                            `${item.group || ""}:${item.src || item.filename}`;
+                        const isSelected = !!pendingRemovals[
+                            prod.handle
+                        ]?.images?.some(
+                            (item) => removalKey(item) === removalKey(m),
+                        );
+                        if (isSelected) {
+                            card.classList.add("media-card-remove-selected");
+                        }
+
+                        card.addEventListener("click", (e) => {
+                            if (!deleteMode || !canRemove) return;
+                            e.stopPropagation();
+                            const currentlySelected = !!pendingRemovals[
+                                prod.handle
+                            ]?.images?.some(
+                                (item) => removalKey(item) === removalKey(m),
+                            );
+                            const changed = togglePendingRemoval(
+                                prod.handle,
+                                prod.folderPath || path.dirname(m.src),
+                                m,
+                                !currentlySelected,
+                            );
+                            if (!changed) return;
+                            card.classList.toggle(
+                                "media-card-remove-selected",
+                                !currentlySelected,
+                            );
+                        });
+
                         if (m.status && m.status !== "unchanged") {
                             const badge = document.createElement("div");
-                            badge.style.cssText =
-                                "position:absolute; top:0; right:0; background:#2196f3; color:white; font-size:9px; padding:2px 4px; z-index:2;";
-                            badge.textContent = m.status.toUpperCase();
+                            const normalized = String(
+                                m.status || "",
+                            ).toLowerCase();
+                            let badgeText = normalized.toUpperCase();
+                            let background = "#2196f3";
+                            let color = "white";
+
+                            if (normalized === "new") {
+                                badgeText = "N";
+                                background = "#0f9d58";
+                            } else if (normalized === "updated") {
+                                badgeText = "U";
+                                background = "#2196f3";
+                            } else if (normalized === "reordered") {
+                                badgeText = "R";
+                                background = "#e4a100";
+                                color = "#202223";
+                            } else if (normalized === "deleted_asset") {
+                                badgeText = "D";
+                                background = "#d32f2f";
+                            }
+
+                            badge.style.cssText = `position:absolute; top:0; right:0; background:${background}; color:${color}; font-size:9px; padding:2px 4px; z-index:2;`;
+                            badge.textContent = badgeText;
                             card.appendChild(badge);
                         }
 
@@ -1028,6 +1747,14 @@ function renderGallery(products, containerId, showAll = false) {
                         rowDiv.appendChild(card);
                     });
 
+                    if (isDraggable && items.length === 0) {
+                        const emptyHint = document.createElement("div");
+                        emptyHint.style.cssText =
+                            "font-size:11px; color:#8a8a8a; padding:8px; align-self:center;";
+                        emptyHint.textContent = "Drop images here";
+                        rowDiv.appendChild(emptyHint);
+                    }
+
                     sec.appendChild(rowDiv);
                     mainWrapper.appendChild(sec);
                 };
@@ -1040,16 +1767,16 @@ function renderGallery(products, containerId, showAll = false) {
                 // Order: Main, Banner, Extra, Other
                 // Filter based on activeMediaType
                 if (activeMediaType === "all") {
-                    renderSection("Main Images", groups.main, true);
-                    renderSection("Banners", groups.banner);
-                    renderSection("Extras", groups.extra);
-                    renderSection("Other", groups.other);
+                    renderSection("main", "Main Images", groups.main, true);
+                    renderSection("banner", "Banners", groups.banner, true);
+                    renderSection("extra", "Extras", groups.extra, true);
+                    renderSection("other", "Other", groups.other);
                 } else if (activeMediaType === "main") {
-                    renderSection("Main Images", groups.main, true);
+                    renderSection("main", "Main Images", groups.main, true);
                 } else if (activeMediaType === "banner") {
-                    renderSection("Banners", groups.banner);
+                    renderSection("banner", "Banners", groups.banner, true);
                 } else if (activeMediaType === "extra") {
-                    renderSection("Extras", groups.extra);
+                    renderSection("extra", "Extras", groups.extra, true);
                 }
 
                 // grid is populated by renderSection (which appends to mainWrapper which is grid)
@@ -1068,6 +1795,8 @@ function renderGallery(products, containerId, showAll = false) {
     console.log(
         `[renderGallery] Finished. Container now has ${container.children.length} children.`,
     );
+    updateReorderBar();
+    updateRemovalBar();
 }
 
 // Debounce Utility

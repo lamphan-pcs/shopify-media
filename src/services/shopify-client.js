@@ -40,58 +40,10 @@ class ShopifyClient {
         }
 
         // Build Metafields Query Segment
-        let metafieldQuery = "";
-        if (metafieldKeysString) {
-            const keys = metafieldKeysString.split(",").map((k) => k.trim());
-            keys.forEach((k, index) => {
-                const part = k.split(".");
-                let namespace = "custom";
-                let key = k;
-
-                if (part.length >= 2) {
-                    namespace = part[0];
-                    key = part.slice(1).join(".");
-                }
-
-                console.log(
-                    `[Shopify] Generating query for metafield: namespace=${namespace}, key=${key}`,
-                );
-
-                metafieldQuery += `
-                     mf_${index}: metafield(namespace: "${namespace}", key: "${key}") {
-                        id
-                        type
-                        reference {
-                           ... on MediaImage {
-                               image {
-                                   originalSrc: url
-                                   id
-                               }
-                           }
-                           ... on GenericFile {
-                               originalSrc: url
-                               id
-                           }
-                        }
-                        references(first: 20) {
-                            edges {
-                                node {
-                                   ... on MediaImage {
-                                       image {
-                                           originalSrc: url
-                                           id
-                                       }
-                                   }
-                                   ... on GenericFile {
-                                       originalSrc: url
-                                       id
-                                   }
-                                }
-                            }
-                        }
-                     }`;
-            });
-        }
+        const metafieldQuery = this._buildMediaMetafieldQuery(
+            metafieldKeysString,
+            true,
+        );
 
         const queryArg = queryFilter.trim()
             ? `, query: "${queryFilter.trim()}"`
@@ -165,6 +117,128 @@ class ShopifyClient {
         return this._request(query, { cursor });
     }
 
+    _parseMetafieldKeys(metafieldKeysString = "") {
+        if (!metafieldKeysString) return [];
+
+        return metafieldKeysString
+            .split(",")
+            .map((k) => k.trim())
+            .filter(Boolean)
+            .map((k) => {
+                const part = k.split(".");
+                let namespace = "custom";
+                let key = k;
+
+                if (part.length >= 2) {
+                    namespace = part[0];
+                    key = part.slice(1).join(".");
+                }
+
+                return { namespace, key };
+            });
+    }
+
+    _buildMediaMetafieldQuery(
+        metafieldKeysString = "",
+        includeLegacyIds = false,
+    ) {
+        const keys = this._parseMetafieldKeys(metafieldKeysString);
+        if (keys.length === 0) return "";
+
+        return keys
+            .map(({ namespace, key }, index) => {
+                console.log(
+                    `[Shopify] Generating query for metafield: namespace=${namespace}, key=${key}`,
+                );
+
+                return `
+                     mf_${index}: metafield(namespace: "${namespace}", key: "${key}") {
+                        id
+                        namespace
+                        key
+                        type
+                        value
+                        reference {
+                           ... on MediaImage {
+                               id
+                               image {
+                                   originalSrc: url
+                                   id
+                               }
+                           }
+                           ... on GenericFile {
+                               id
+                               originalSrc: url
+                           }
+                        }
+                        references(first: 50) {
+                            edges {
+                                node {
+                                   ... on MediaImage {
+                                       id
+                                       image {
+                                           originalSrc: url
+                                           id
+                                       }
+                                   }
+                                   ... on GenericFile {
+                                       id
+                                       originalSrc: url
+                                   }
+                                }
+                            }
+                        }
+                     }`;
+            })
+            .join("");
+    }
+
+    _classifyManagedMediaMetafield(key = "") {
+        const normalized = String(key || "").toLowerCase();
+
+        if (
+            normalized.endsWith("bannerone") ||
+            normalized.endsWith("banner_1")
+        ) {
+            return "banner";
+        }
+
+        if (
+            normalized.endsWith("imagelistone") ||
+            normalized.endsWith("image_list_1")
+        ) {
+            return "extra";
+        }
+
+        return null;
+    }
+
+    _getManagedMediaSlots(product, metafieldKeysString = "") {
+        const parsedKeys = this._parseMetafieldKeys(metafieldKeysString);
+        const slots = {
+            banner: null,
+            extra: null,
+        };
+
+        parsedKeys.forEach(({ namespace, key }, index) => {
+            const slotType = this._classifyManagedMediaMetafield(key);
+            if (!slotType || slots[slotType]) return;
+
+            const metafield = product[`mf_${index}`] || null;
+            slots[slotType] = {
+                namespace,
+                key,
+                type:
+                    metafield?.type ||
+                    (slotType === "banner"
+                        ? "file_reference"
+                        : "list.file_reference"),
+            };
+        });
+
+        return slots;
+    }
+
     async reorderProductMedia(productId, moves = []) {
         if (!productId) {
             throw new Error("Missing product ID for media reorder");
@@ -225,6 +299,616 @@ class ShopifyClient {
         }
 
         return result.job || null;
+    }
+
+    async updateFileProductReferences(updates = []) {
+        if (!Array.isArray(updates) || updates.length === 0) return null;
+
+        const mutation = `
+        mutation fileUpdate($files: [FileUpdateInput!]!) {
+            fileUpdate(files: $files) {
+                files {
+                    id
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }`;
+
+        const data = await this._request(mutation, {
+            files: updates,
+        });
+        const result = data?.fileUpdate;
+        const errors = (result?.userErrors || []).map((e) => e.message);
+        if (errors.length > 0) {
+            throw new Error(
+                `Shopify file reference update failed: ${errors.join(", ")}`,
+            );
+        }
+
+        return result;
+    }
+
+    async getProductMediaContext(handle, metafieldKeysString = "") {
+        if (!handle) {
+            throw new Error("Handle is required");
+        }
+
+        const metafieldQuery = this._buildMediaMetafieldQuery(
+            metafieldKeysString,
+            false,
+        );
+        const escapedHandle = String(handle).replace(/"/g, '\\"');
+
+        const query = `
+        {
+            productByHandle(handle: "${escapedHandle}") {
+                id
+                title
+                handle
+                media(first: 100) {
+                    edges {
+                        node {
+                            ... on MediaImage {
+                                id
+                                mediaContentType
+                                image {
+                                    originalSrc: url
+                                    id
+                                }
+                            }
+                            ... on Video {
+                                id
+                                mediaContentType
+                            }
+                            ... on Model3d {
+                                id
+                                mediaContentType
+                            }
+                            ... on ExternalVideo {
+                                id
+                                mediaContentType
+                            }
+                        }
+                    }
+                }
+                ${metafieldQuery}
+            }
+        }`;
+
+        const data = await this._request(query);
+        return data?.productByHandle || null;
+    }
+
+    async _setMetafields(metafields = []) {
+        if (!Array.isArray(metafields) || metafields.length === 0) return;
+
+        const mutation = `
+        mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+                metafields {
+                    key
+                    namespace
+                    value
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }`;
+
+        const data = await this._request(mutation, { metafields });
+        const result = data?.metafieldsSet;
+        const errors = (result?.userErrors || []).map((e) => e.message);
+        if (errors.length > 0) {
+            console.error(
+                `[Metafields] Set failed. Payload:`,
+                JSON.stringify(metafields, null, 2),
+            );
+            console.error(`[Metafields] Errors:`, errors);
+            throw new Error(
+                `Metafields set failed: ${errors.join(", ")}\n` +
+                    `Payload: ${JSON.stringify(metafields)}`,
+            );
+        }
+    }
+
+    async _deleteMetafields(metafields = []) {
+        if (!Array.isArray(metafields) || metafields.length === 0) return;
+
+        const mutation = `
+        mutation metafieldsDelete($metafields: [MetafieldIdentifierInput!]!) {
+            metafieldsDelete(metafields: $metafields) {
+                deletedMetafields {
+                    namespace
+                    key
+                    ownerId
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }`;
+
+        const data = await this._request(mutation, { metafields });
+        const result = data?.metafieldsDelete;
+        const errors = (result?.userErrors || []).map((e) => e.message);
+        if (errors.length > 0) {
+            throw new Error(`Metafields delete failed: ${errors.join(", ")}`);
+        }
+    }
+
+    async detachFilesFromProduct(productId, fileIds = []) {
+        if (!productId) {
+            throw new Error("Missing product ID for file detach");
+        }
+        if (!Array.isArray(fileIds) || fileIds.length === 0) {
+            throw new Error("No file IDs provided for detach");
+        }
+
+        const mutation = `
+        mutation fileUpdate($files: [FileUpdateInput!]!) {
+            fileUpdate(files: $files) {
+                files {
+                    id
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }`;
+
+        const files = fileIds.map((id) => ({
+            id,
+            referencesToRemove: [productId],
+        }));
+
+        const data = await this._request(mutation, { files });
+        const result = data?.fileUpdate;
+        const errors = (result?.userErrors || []).map((e) => e.message);
+        if (errors.length > 0) {
+            throw new Error(`Shopify file detach failed: ${errors.join(", ")}`);
+        }
+
+        return result;
+    }
+
+    async removeSelectedProductImages(
+        handle,
+        selectedImages = [],
+        metafieldKeysString = "",
+    ) {
+        if (!handle) {
+            throw new Error("Handle is required");
+        }
+        if (!Array.isArray(selectedImages) || selectedImages.length === 0) {
+            throw new Error("No images were selected for removal");
+        }
+
+        const product = await this.getProductMediaContext(
+            handle,
+            metafieldKeysString,
+        );
+        if (!product) {
+            throw new Error(`Product not found: ${handle}`);
+        }
+
+        const selectedMediaIds = new Set(
+            selectedImages.map((item) => item.mediaId).filter(Boolean),
+        );
+        const selectedFileIds = new Set(
+            selectedImages.map((item) => item.fileId).filter(Boolean),
+        );
+        const selectedFilenames = new Set(
+            selectedImages
+                .map((item) => String(item.filename || "").toLowerCase())
+                .filter(Boolean),
+        );
+
+        const normalizedFilename = (value = "") => {
+            const raw =
+                String(value || "")
+                    .split("?")[0]
+                    .split("/")
+                    .pop() || "";
+            return raw.toLowerCase();
+        };
+
+        const matchesSelection = (candidate = {}) => {
+            const mediaId = candidate.mediaId || candidate.id || "";
+            const fileId = candidate.fileId || candidate.imageId || "";
+            const url = candidate.url || "";
+            const remoteFilename = normalizedFilename(url);
+
+            if (mediaId && selectedMediaIds.has(mediaId)) return true;
+            if (fileId && selectedFileIds.has(fileId)) return true;
+            if (!remoteFilename) return false;
+
+            for (const filename of selectedFilenames) {
+                if (
+                    filename === remoteFilename ||
+                    filename.endsWith(`-${remoteFilename}`)
+                ) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        const fileIdsToDetach = new Set();
+        (product.media?.edges || []).forEach((edge) => {
+            const node = edge?.node;
+            if (!node || node.mediaContentType !== "IMAGE") return;
+
+            if (
+                matchesSelection({
+                    mediaId: node.id,
+                    fileId: node.image?.id,
+                    url: node.image?.originalSrc,
+                })
+            ) {
+                fileIdsToDetach.add(node.id);
+            }
+        });
+
+        const parsedKeys = this._parseMetafieldKeys(metafieldKeysString);
+        const metafieldsToSet = [];
+        const metafieldsToDelete = [];
+
+        parsedKeys.forEach(({ namespace, key }, index) => {
+            const metafield = product[`mf_${index}`];
+            if (!metafield?.type) return;
+
+            if (metafield.type === "file_reference") {
+                const reference = metafield.reference;
+                if (
+                    reference &&
+                    matchesSelection({
+                        mediaId: reference.id,
+                        fileId: reference.image?.id || reference.id,
+                        url:
+                            reference.image?.originalSrc ||
+                            reference.originalSrc ||
+                            "",
+                    })
+                ) {
+                    metafieldsToDelete.push({
+                        ownerId: product.id,
+                        namespace,
+                        key,
+                    });
+                    fileIdsToDetach.add(reference.id);
+                }
+                return;
+            }
+
+            if (metafield.type !== "list.file_reference") return;
+
+            const refs = (metafield.references?.edges || []).map((edge) => {
+                const node = edge?.node || {};
+                return {
+                    id: node.id,
+                    fileId: node.image?.id || node.id,
+                    url: node.image?.originalSrc || node.originalSrc || "",
+                };
+            });
+
+            const remaining = refs.filter((ref) => !matchesSelection(ref));
+            if (remaining.length === refs.length) return;
+
+            refs.filter((ref) => !remaining.includes(ref)).forEach((ref) =>
+                fileIdsToDetach.add(ref.id),
+            );
+
+            if (remaining.length === 0) {
+                metafieldsToDelete.push({
+                    ownerId: product.id,
+                    namespace,
+                    key,
+                });
+                return;
+            }
+
+            metafieldsToSet.push({
+                ownerId: product.id,
+                namespace,
+                key,
+                type: metafield.type,
+                value: JSON.stringify(remaining.map((ref) => ref.id)),
+            });
+        });
+
+        if (
+            fileIdsToDetach.size === 0 &&
+            metafieldsToSet.length === 0 &&
+            metafieldsToDelete.length === 0
+        ) {
+            throw new Error(
+                "No matching Shopify images were found for the selected items",
+            );
+        }
+
+        if (metafieldsToSet.length > 0) {
+            await this._setMetafields(metafieldsToSet);
+        }
+        if (metafieldsToDelete.length > 0) {
+            await this._deleteMetafields(metafieldsToDelete);
+        }
+
+        let detachResult = null;
+        if (fileIdsToDetach.size > 0) {
+            detachResult = await this.detachFilesFromProduct(product.id, [
+                ...fileIdsToDetach,
+            ]);
+        }
+
+        return {
+            productId: product.id,
+            detachedFileIds: [...fileIdsToDetach],
+            metafieldsSet: metafieldsToSet.length,
+            metafieldsDeleted: metafieldsToDelete.length,
+            detachResult,
+        };
+    }
+
+    async applyProductMediaLayout(
+        handle,
+        layout = {},
+        metafieldKeysString = "",
+    ) {
+        if (!handle) {
+            throw new Error("Handle is required");
+        }
+
+        const product = await this.getProductMediaContext(
+            handle,
+            metafieldKeysString,
+        );
+        if (!product) {
+            throw new Error(`Product not found: ${handle}`);
+        }
+
+        const slots = this._getManagedMediaSlots(product, metafieldKeysString);
+
+        // Build a map from any legacy/wrong GID variants → canonical MediaImage GID.
+        // Covers: gid://shopify/ImageSource/N  →  gid://shopify/MediaImage/N
+        //         raw numeric strings           →  gid://shopify/MediaImage/N
+        const imageSourceToMediaImage = new Map();
+        const addNodeToMap = (node) => {
+            if (!node || !node.id) return;
+            const mediaGid = node.id; // gid://shopify/MediaImage/N
+            if (node.image?.id) {
+                imageSourceToMediaImage.set(node.image.id, mediaGid);
+            }
+            const numericMatch = String(mediaGid).match(/(\d+)$/);
+            if (numericMatch) {
+                imageSourceToMediaImage.set(numericMatch[1], mediaGid);
+                imageSourceToMediaImage.set(
+                    `gid://shopify/ImageSource/${numericMatch[1]}`,
+                    mediaGid,
+                );
+            }
+        };
+
+        // Index main product media
+        (product.media?.edges || []).forEach((edge) => {
+            const node = edge?.node;
+            if (!node || node.mediaContentType !== "IMAGE") return;
+            addNodeToMap(node);
+        });
+
+        // Index metafield reference images (banner/extra may not appear in main media)
+        // Also map the metafield node GID itself (gid://shopify/Metafield/N) → MediaImage GID
+        // to handle stale manifests that stored the metafield GID as the primary id.
+        const parsedKeysForNorm = this._parseMetafieldKeys(metafieldKeysString);
+        parsedKeysForNorm.forEach((_, index) => {
+            const mf = product[`mf_${index}`];
+            if (!mf) return;
+            if (mf.reference) {
+                addNodeToMap(mf.reference);
+                // mf.id is gid://shopify/Metafield/N — map it to the reference MediaImage GID
+                if (mf.id && mf.reference.id) {
+                    imageSourceToMediaImage.set(mf.id, mf.reference.id);
+                }
+            }
+            (mf.references?.edges || []).forEach((e) => addNodeToMap(e?.node));
+        });
+
+        const normalizeId = (id) => imageSourceToMediaImage.get(id) || id;
+
+        console.log(`[Layout] applyProductMediaLayout: ${handle}`);
+        console.log(
+            `[Layout] Raw layout input:`,
+            JSON.stringify(layout, null, 2),
+        );
+        console.log(
+            `[Layout] imageSourceToMediaImage map:`,
+            Object.fromEntries(imageSourceToMediaImage),
+        );
+
+        const desiredMainIds = (layout.main || [])
+            .map((item) => normalizeId(item.fileId))
+            .filter(Boolean);
+        const desiredBannerIds = (layout.banner || [])
+            .map((item) => normalizeId(item.fileId))
+            .filter(Boolean);
+        const desiredExtraIds = (layout.extra || [])
+            .map((item) => normalizeId(item.fileId))
+            .filter(Boolean);
+
+        console.log(`[Layout] desiredMainIds (normalized):`, desiredMainIds);
+        console.log(
+            `[Layout] desiredBannerIds (normalized):`,
+            desiredBannerIds,
+        );
+        console.log(`[Layout] desiredExtraIds (normalized):`, desiredExtraIds);
+        console.log(`[Layout] slots:`, JSON.stringify(slots, null, 2));
+
+        if (desiredBannerIds.length > 1) {
+            throw new Error("Only one banner image can be assigned at a time");
+        }
+
+        if (desiredBannerIds.length > 0 && !slots.banner) {
+            throw new Error(
+                "Banner metafield is not configured. Add the banner metafield key in the dashboard first.",
+            );
+        }
+
+        if (desiredExtraIds.length > 0 && !slots.extra) {
+            throw new Error(
+                "Extra images metafield is not configured. Add the extra-image metafield key in the dashboard first.",
+            );
+        }
+
+        const currentMainIds = (product.media?.edges || [])
+            .map((edge) => edge?.node)
+            .filter((node) => node && node.mediaContentType === "IMAGE")
+            .map((node) => node.id);
+
+        const currentMainSet = new Set(currentMainIds);
+        const desiredMainSet = new Set(desiredMainIds);
+
+        const fileReferenceUpdates = [];
+        desiredMainIds.forEach((id) => {
+            if (!currentMainSet.has(id)) {
+                fileReferenceUpdates.push({
+                    id,
+                    referencesToAdd: [product.id],
+                });
+            }
+        });
+        currentMainIds.forEach((id) => {
+            if (!desiredMainSet.has(id)) {
+                fileReferenceUpdates.push({
+                    id,
+                    referencesToRemove: [product.id],
+                });
+            }
+        });
+
+        const metafieldsToSet = [];
+        const metafieldsToDelete = [];
+
+        console.log(`[Layout] currentMainIds:`, currentMainIds);
+        console.log(
+            `[Layout] fileReferenceUpdates:`,
+            JSON.stringify(fileReferenceUpdates, null, 2),
+        );
+
+        if (slots.banner) {
+            if (desiredBannerIds.length === 0) {
+                metafieldsToDelete.push({
+                    ownerId: product.id,
+                    namespace: slots.banner.namespace,
+                    key: slots.banner.key,
+                });
+            } else {
+                metafieldsToSet.push({
+                    ownerId: product.id,
+                    namespace: slots.banner.namespace,
+                    key: slots.banner.key,
+                    type: "file_reference",
+                    value: desiredBannerIds[0],
+                });
+            }
+        }
+
+        if (slots.extra) {
+            if (desiredExtraIds.length === 0) {
+                metafieldsToDelete.push({
+                    ownerId: product.id,
+                    namespace: slots.extra.namespace,
+                    key: slots.extra.key,
+                });
+            } else if (slots.extra.type === "file_reference") {
+                if (desiredExtraIds.length > 1) {
+                    throw new Error(
+                        "Configured extra-image metafield only supports one file reference",
+                    );
+                }
+                metafieldsToSet.push({
+                    ownerId: product.id,
+                    namespace: slots.extra.namespace,
+                    key: slots.extra.key,
+                    type: "file_reference",
+                    value: desiredExtraIds[0],
+                });
+            } else {
+                metafieldsToSet.push({
+                    ownerId: product.id,
+                    namespace: slots.extra.namespace,
+                    key: slots.extra.key,
+                    type: "list.file_reference",
+                    value: JSON.stringify(desiredExtraIds),
+                });
+            }
+        }
+
+        console.log(
+            `[Layout] metafieldsToSet:`,
+            JSON.stringify(metafieldsToSet, null, 2),
+        );
+        console.log(
+            `[Layout] metafieldsToDelete:`,
+            JSON.stringify(metafieldsToDelete, null, 2),
+        );
+
+        const newlyAddedFileIds = new Set(
+            fileReferenceUpdates
+                .filter((u) => u.referencesToAdd?.length > 0)
+                .map((u) => u.id),
+        );
+
+        if (fileReferenceUpdates.length > 0) {
+            await this.updateFileProductReferences(fileReferenceUpdates);
+        }
+        if (metafieldsToSet.length > 0) {
+            await this._setMetafields(metafieldsToSet);
+        }
+        if (metafieldsToDelete.length > 0) {
+            await this._deleteMetafields(metafieldsToDelete);
+        }
+
+        let reorderResult = null;
+        let mainIdsForReorder = desiredMainIds;
+        if (newlyAddedFileIds.size > 0 && desiredMainIds.length >= 2) {
+            // Re-fetch so newly attached files appear in product media before reordering
+            const updatedProduct = await this.getProductMediaContext(
+                handle,
+                metafieldKeysString,
+            );
+            const updatedMainIds = new Set(
+                (updatedProduct?.media?.edges || [])
+                    .map((e) => e?.node)
+                    .filter((n) => n && n.mediaContentType === "IMAGE")
+                    .map((n) => n.id),
+            );
+            // Keep desired order but only include IDs now present in product media
+            mainIdsForReorder = desiredMainIds.filter((id) =>
+                updatedMainIds.has(id),
+            );
+        }
+        if (mainIdsForReorder.length >= 2) {
+            const moves = mainIdsForReorder.map((id, index) => ({
+                id,
+                newPosition: index,
+            }));
+            reorderResult = await this.reorderProductMedia(product.id, moves);
+        }
+
+        return {
+            productId: product.id,
+            mainCount: desiredMainIds.length,
+            bannerCount: desiredBannerIds.length,
+            extraCount: desiredExtraIds.length,
+            reorderResult,
+        };
     }
 
     async getProductIdByHandle(handle) {

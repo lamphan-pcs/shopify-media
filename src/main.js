@@ -94,6 +94,7 @@ function scanDirectoryForProducts(basePath) {
                 return {
                     title: folder.name,
                     handle: folder.name,
+                    folderPath: productPath,
                     media: files.map((f) => ({
                         src: path.join(productPath, f),
                         filename: f,
@@ -184,9 +185,11 @@ ipcMain.handle("load-library", async (event, folderPath) => {
             }
         }
 
-        // Update product with actual handle
+        // Update product with actual handle and title from manifest if available
         p.handle = actualHandle;
-        p.title = p.title || actualHandle;
+        p.title = manifestProduct?.title || p.title || actualHandle;
+        p.folderName = manifestProduct?.folderName || folderName;
+        p.productName = p.title;
 
         if (manifestProduct) {
             // Merge metadata from manifest
@@ -194,6 +197,7 @@ ipcMain.handle("load-library", async (event, folderPath) => {
             p.category = manifestProduct.category || "";
             p.tags = manifestProduct.tags || [];
             p.shopifyId = manifestProduct.id || "";
+            p.folderPath = p.folderPath || path.join(folderPath, folderName);
 
             p.media = p.media.map((m) => {
                 const knownFile = manifestProduct.media
@@ -222,6 +226,7 @@ ipcMain.handle("load-library", async (event, folderPath) => {
                     status: manifestStatus,
                     group: group,
                     shopifyId: knownFile ? knownFile.id || "" : "",
+                    shopifyFileId: knownFile ? knownFile._fileId || "" : "",
                     position: knownFile ? knownFile.position || 0 : 0,
                 };
             });
@@ -398,7 +403,7 @@ ipcMain.handle(
 
 ipcMain.handle(
     "reorder-product-media",
-    async (event, { shopUrl, apiKey, reorders }) => {
+    async (event, { shopUrl, apiKey, metafields, reorders }) => {
         if (!shopUrl || !apiKey)
             throw new Error("Missing Shop URL or API Token");
         if (!Array.isArray(reorders) || reorders.length === 0)
@@ -407,9 +412,13 @@ ipcMain.handle(
         const client = new ShopifyClient(shopUrl, apiKey);
         const results = [];
 
-        for (const { handle, productId, moves } of reorders) {
+        for (const { handle, layout } of reorders) {
             try {
-                await client.reorderProductMedia(productId, moves);
+                const outcome = await client.applyProductMediaLayout(
+                    handle,
+                    layout,
+                    metafields,
+                );
                 results.push({ handle, success: true });
             } catch (err) {
                 console.error(`[Reorder] Failed for ${handle}:`, err.message);
@@ -441,6 +450,68 @@ ipcMain.handle(
             );
             throw err;
         }
+    },
+);
+
+ipcMain.handle(
+    "remove-product-images",
+    async (event, { shopUrl, apiKey, metafields, removals }) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!Array.isArray(removals) || removals.length === 0)
+            throw new Error("No image removals provided");
+
+        const client = new ShopifyClient(shopUrl, apiKey);
+        const results = [];
+
+        for (const removal of removals) {
+            const { handle, images = [], folderPath } = removal;
+
+            try {
+                const outcome = await client.removeSelectedProductImages(
+                    handle,
+                    images,
+                    metafields,
+                );
+
+                for (const image of images) {
+                    const candidatePath =
+                        image.src ||
+                        (folderPath && image.filename
+                            ? path.join(folderPath, image.filename)
+                            : null);
+
+                    if (candidatePath && fs.existsSync(candidatePath)) {
+                        try {
+                            fs.unlinkSync(candidatePath);
+                        } catch (err) {
+                            console.warn(
+                                `[RemoveMedia] Shopify delete succeeded but local delete failed for ${candidatePath}: ${err.message}`,
+                            );
+                        }
+                    }
+                }
+
+                results.push({
+                    handle,
+                    success: true,
+                    removedCount: images.length,
+                    detachedFileIds: outcome.detachedFileIds,
+                });
+            } catch (err) {
+                console.error(
+                    `[RemoveMedia] Failed for ${handle}:`,
+                    err.message,
+                );
+                results.push({
+                    handle,
+                    success: false,
+                    error: err.message,
+                });
+            }
+        }
+
+        return results;
     },
 );
 

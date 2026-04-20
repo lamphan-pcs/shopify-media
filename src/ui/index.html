@@ -81,6 +81,23 @@
                 color: #b8860b;
             }
 
+            #removalBar {
+                display: none;
+                background: linear-gradient(135deg, #ffeaea 0%, #fff5f5 100%);
+                border: 2px solid #ef5350;
+                border-radius: 8px;
+                padding: 15px 20px;
+                margin-bottom: 20px;
+                align-items: center;
+                justify-content: space-between;
+                gap: 15px;
+                box-shadow: 0 2px 8px rgba(239, 83, 80, 0.15);
+            }
+
+            #removalBar span[style*="font-weight"] {
+                color: #b71c1c;
+            }
+
             .reorder-btn {
                 padding: 10px 16px;
                 border-radius: 6px;
@@ -112,6 +129,69 @@
                 background: white;
                 border-color: #999;
             }
+
+            /* Floating Library Actions Panel */
+            #floatingLibraryPanel {
+                display: none;
+                position: fixed;
+                right: 18px;
+                top: 50%;
+                transform: translateY(-50%);
+                z-index: 1000;
+                flex-direction: column;
+                gap: 10px;
+                background: rgba(255, 255, 255, 0.97);
+                border: 1px solid #d0d7de;
+                border-radius: 12px;
+                padding: 14px 12px;
+                box-shadow: 0 4px 24px rgba(0, 0, 0, 0.13);
+                min-width: 160px;
+            }
+            #floatingLibraryPanel.visible {
+                display: flex;
+            }
+            .float-btn {
+                padding: 9px 14px;
+                border: none;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                text-align: center;
+                transition:
+                    filter 0.15s,
+                    transform 0.1s;
+                white-space: nowrap;
+            }
+            .float-btn:hover:not(:disabled) {
+                filter: brightness(1.1);
+                transform: translateY(-1px);
+            }
+            .float-btn:disabled {
+                opacity: 0.45;
+                cursor: not-allowed;
+                transform: none;
+                filter: none;
+            }
+            #floatDeleteBtn {
+                background: #757575;
+                color: #fff;
+            }
+            #floatDeleteBtn.active {
+                background: #d32f2f;
+            }
+            #floatCleanupBtn {
+                background: #b71c1c;
+                color: #fff;
+            }
+            #floatPushBtn {
+                background: #008060;
+                color: #fff;
+            }
+            #floatPushBtn:disabled {
+                background: #ccc;
+            }
+
             .tab-content {
                 display: none;
             }
@@ -418,6 +498,32 @@
                 opacity: 0.5;
                 cursor: not-allowed;
             }
+            .product-header-actions {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+            .product-reset-btn {
+                width: 34px;
+                height: 34px;
+                min-width: 34px;
+                border-radius: 8px;
+                border: 1px solid #d0d7de;
+                background: #fff;
+                color: #1f2937;
+                font-size: 16px;
+                line-height: 1;
+                padding: 0;
+                cursor: pointer;
+            }
+            .product-reset-btn:hover:not(:disabled) {
+                border-color: #f39c12;
+                background: #fff8e8;
+            }
+            .product-reset-btn:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
             .product-title {
                 font-weight: 600;
                 color: #202223;
@@ -460,6 +566,32 @@
                 box-shadow: 0 4px 12px rgba(0, 128, 96, 0.15);
                 transform: scale(1.04);
             }
+            .media-card-remove-selected {
+                border-color: #d32f2f !important;
+                box-shadow: 0 0 0 3px rgba(211, 47, 47, 0.2) !important;
+                background: #fff5f5 !important;
+            }
+            .media-remove-toggle {
+                position: absolute;
+                top: 6px;
+                left: 6px;
+                width: 22px;
+                height: 22px;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, 0.95);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 3;
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+            }
+            .media-remove-checkbox {
+                width: 14px;
+                height: 14px;
+                margin: 0;
+                cursor: pointer;
+                accent-color: #d32f2f;
+            }
             .media-card img,
             .media-card video {
                 width: 100%;
@@ -469,12 +601,12 @@
 
             /* Badging Status */
             .status-new {
-                border-color: #2c6ecb;
-                box-shadow: 0 0 0 2px rgba(44, 110, 203, 0.2);
+                border-color: #0f9d58;
+                box-shadow: 0 0 0 2px rgba(15, 157, 88, 0.2);
             }
             .status-updated {
-                border-color: #008060;
-                box-shadow: 0 0 0 2px rgba(0, 128, 96, 0.2);
+                border-color: #2196f3;
+                box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
             }
             .status-reordered {
                 border-color: #e4a100;
@@ -493,10 +625,10 @@
                 z-index: 2;
             }
             .tag-new {
-                background: #2c6ecb;
+                background: #0f9d58;
             }
             .tag-updated {
-                background: #008060;
+                background: #2196f3;
             }
             .tag-reordered {
                 background: #e4a100;
@@ -558,8 +690,12 @@
             }
 
             .badge-NEW_ASSET {
-                background: #e3f9e5;
-                color: #0d5e1b;
+                background: #dff7e6;
+                color: #0f9d58;
+            }
+            .badge-UPDATED_ASSET {
+                background: #e3f2fd;
+                color: #2196f3;
             }
             .badge-REORDERED {
                 background: #fff4ce;
@@ -1020,6 +1156,32 @@
                         </button>
                         <button
                             onclick="discardReorders()"
+                            class="reorder-btn reorder-btn-secondary"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+
+                <div id="removalBar">
+                    <div style="display: flex; align-items: center; gap: 8px">
+                        <span style="font-size: 1.1em">🗑</span>
+                        <span
+                            id="removalBarMsg"
+                            style="font-weight: 600; color: #b71c1c"
+                        ></span>
+                    </div>
+                    <div style="display: flex; gap: 8px">
+                        <button
+                            id="pushRemovalsBtn"
+                            onclick="pushRemovalsToShopify()"
+                            class="reorder-btn"
+                            style="background: #d32f2f; color: white"
+                        >
+                            Remove from Shopify
+                        </button>
+                        <button
+                            onclick="discardRemovals()"
                             class="reorder-btn reorder-btn-secondary"
                         >
                             Cancel
@@ -1891,6 +2053,44 @@
                 </div>
             </div>
             <!-- End tab-shipping -->
+        </div>
+
+        <!-- Floating library action panel (right side) -->
+        <div id="floatingLibraryPanel">
+            <div
+                style="
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: #888;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    margin-bottom: 2px;
+                "
+            >
+                Library
+            </div>
+            <button
+                id="floatDeleteBtn"
+                class="float-btn"
+                onclick="toggleDeleteMode()"
+            >
+                🗑 Delete: OFF
+            </button>
+            <button
+                id="floatCleanupBtn"
+                class="float-btn"
+                onclick="cleanupLibrary()"
+            >
+                🧹 Clean Up
+            </button>
+            <button
+                id="floatPushBtn"
+                class="float-btn"
+                onclick="floatPushToShopify()"
+                disabled
+            >
+                ↑ Push to Shopify
+            </button>
         </div>
 
         <script src="renderer.js"></script>

@@ -130,14 +130,14 @@ class SyncEngine {
                         const url =
                             node.reference?.image?.originalSrc ||
                             node.reference?.originalSrc;
-                        const id =
+                        const _fileId =
                             node.reference?.image?.id ||
                             node.reference?.id ||
                             node.id;
                         if (url) {
                             targets.push({
-                                id: node.id,
-                                _fileId: id,
+                                id: node.reference?.id || node.id,
+                                _fileId: _fileId,
                                 url: url,
                                 typeGroup: "banner",
                             });
@@ -153,14 +153,14 @@ class SyncEngine {
                             const url =
                                 node.reference.image?.originalSrc ||
                                 node.reference.originalSrc;
-                            const id =
+                            const _fileId =
                                 node.reference.image?.id ||
                                 node.reference.id ||
                                 node.id;
                             if (url) {
                                 targets.push({
-                                    id: node.id,
-                                    _fileId: id,
+                                    id: node.reference.id || node.id,
+                                    _fileId: _fileId,
                                     url,
                                     typeGroup: "extra",
                                 });
@@ -172,11 +172,10 @@ class SyncEngine {
                                 const n = edge.node;
                                 const url =
                                     n.image?.originalSrc || n.originalSrc;
-                                const id = n.image?.id || n.id;
                                 if (url) {
                                     targets.push({
-                                        id: id,
-                                        _fileId: id,
+                                        id: n.id,
+                                        _fileId: n.image?.id || n.id,
                                         url,
                                         typeGroup: "extra",
                                     });
