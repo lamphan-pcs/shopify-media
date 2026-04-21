@@ -676,7 +676,24 @@ function csvToTsv(csvText) {
         rows.push(row);
     }
 
-    return rows.map((r) => r.join("\t")).join("\n");
+    return rows
+        .map((r) =>
+            r
+                .map((cell) => {
+                    // Re-quote any cell that contains a tab or newline so it
+                    // stays in a single cell when pasted into Excel / Sheets.
+                    if (
+                        cell.includes("\t") ||
+                        cell.includes("\n") ||
+                        cell.includes("\r")
+                    ) {
+                        return `"${cell.replace(/"/g, '""')}"`;
+                    }
+                    return cell;
+                })
+                .join("\t"),
+        )
+        .join("\n");
 }
 
 function generateProductsCSV(products) {

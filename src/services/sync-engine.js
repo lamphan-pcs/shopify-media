@@ -10,7 +10,7 @@ class SyncEngine {
         this.config = config; // { shopUrl, apiKey, downloadPath, initialSync: boolean }
         this.manifest = new ManifestManager(config.downloadPath);
         this.shopify = new ShopifyClient(config.shopUrl, config.apiKey);
-        this.downloader = new Downloader(25); // Set concurrency
+        this.downloader = new Downloader(100); // Set concurrency
         this.changes = [];
         this.detailedResults = []; // Store full product state for UI
     }

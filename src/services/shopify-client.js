@@ -51,7 +51,7 @@ class ShopifyClient {
 
         const query = `
         query ($cursor: String) {
-            products(first: 10, after: $cursor${queryArg}) {
+            products(first: 250, after: $cursor${queryArg}) {
                 pageInfo {
                     hasNextPage
                     endCursor
@@ -936,45 +936,33 @@ class ShopifyClient {
             `[Shopify] Fetching products for export. Cursor: ${cursor}, Limit: ${limit}`,
         );
 
-        // Build Metafields Query Segment
-        let metafieldQuery = "";
-        if (metafieldKeysString) {
-            const keys = metafieldKeysString.split(",").map((k) => k.trim());
-            keys.forEach((k, index) => {
-                const part = k.split(".");
-                let namespace = "custom";
-                let key = k;
-
-                if (part.length >= 2) {
-                    namespace = part[0];
-                    key = part.slice(1).join(".");
-                }
-
-                metafieldQuery += `
-                    mf_${index}: metafield(namespace: "${namespace}", key: "${key}") {
-                        value
-                        type
-                    }`;
-            });
-        }
-
-        // Also fetch standard Shopify metafields for SEO and other properties
-        if (!metafieldQuery.includes("mm-google-shopping")) {
-            metafieldQuery += `
-                metafieldGoogleProduct: metafield(namespace: "mm-google-shopping", key: "custom_product") {
-                    value
-                    type
-                }
-                metafieldFragrance: metafield(namespace: "shopify", key: "fragrance") {
-                    value
-                }
-                metafieldMoisturizerType: metafield(namespace: "shopify", key: "moisturizer-type") {
-                    value
-                }
-                metafieldProductForm: metafield(namespace: "shopify", key: "product-form") {
-                    value
-                }`;
-        }
+        // Hardcoded custom metafields (matching CSV column order mf_0..mf_19)
+        const metafieldQuery = `
+                mf_0: metafield(namespace: "custom", key: "also_like") { value type }
+                mf_1: metafield(namespace: "custom", key: "benefits") { value type }
+                mf_2: metafield(namespace: "custom", key: "cautions") { value type }
+                mf_3: metafield(namespace: "custom", key: "collection_name") { value type }
+                mf_4: metafield(namespace: "custom", key: "custom_questions") { value type }
+                mf_5: metafield(namespace: "custom", key: "disclaimer") { value type }
+                mf_6: metafield(namespace: "custom", key: "how_to_use") { value type }
+                mf_7: metafield(namespace: "custom", key: "ingredients") { value type }
+                mf_8: metafield(namespace: "custom", key: "keywords") { value type }
+                mf_9: metafield(namespace: "custom", key: "key_features") { value type }
+                mf_10: metafield(namespace: "custom", key: "key_ingredients_benefits") { value type }
+                mf_11: metafield(namespace: "custom", key: "key_message") { value type }
+                mf_12: metafield(namespace: "custom", key: "materials") { value type }
+                mf_13: metafield(namespace: "custom", key: "overview") { value type }
+                mf_14: metafield(namespace: "custom", key: "question_answers") { value type }
+                mf_15: metafield(namespace: "custom", key: "short_title") { value type }
+                mf_16: metafield(namespace: "custom", key: "suitable_for_skin_type") { value type }
+                mf_17: metafield(namespace: "custom", key: "user_review") { value type }
+                mf_18: metafield(namespace: "custom", key: "use_it_with") { value type }
+                mf_19: metafield(namespace: "custom", key: "youtube_video_links") { value type }
+                metafieldGoogleProduct: metafield(namespace: "mm-google-shopping", key: "custom_product") { value type }
+                metafieldFragrance: metafield(namespace: "shopify", key: "fragrance") { value }
+                metafieldMoisturizerType: metafield(namespace: "shopify", key: "moisturizer-type") { value }
+                metafieldProductForm: metafield(namespace: "shopify", key: "product-form") { value }
+        `;
 
         const query = `
         query ($cursor: String) {
