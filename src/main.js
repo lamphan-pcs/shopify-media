@@ -31,6 +31,18 @@ app.disableHardwareAcceleration(); // Nuclear option for blank screens
 
 let mainWindow;
 
+function restoreMainWindowFocus() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.focus();
+        if (mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+            mainWindow.webContents.focus();
+        }
+    }, 20);
+}
+
 function scanDirectoryForProducts(basePath) {
     console.log(`[Scan] Scanning directory: ${basePath}`);
     if (!fs.existsSync(basePath)) {
@@ -141,10 +153,14 @@ app.on("window-all-closed", () => {
 // --- IPC HANDLERS ---
 
 ipcMain.handle("select-folder", async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ["openDirectory"],
-    });
-    return result.filePaths[0];
+    try {
+        const result = await dialog.showOpenDialog(mainWindow, {
+            properties: ["openDirectory"],
+        });
+        return result.filePaths[0];
+    } finally {
+        restoreMainWindowFocus();
+    }
 });
 
 ipcMain.handle("open-folder", async (event, folderPath) => {
@@ -217,6 +233,7 @@ ipcMain.handle("load-library", async (event, folderPath) => {
                 if (!group || group === "unknown") {
                     if (m.filename.startsWith("banner-")) group = "banner";
                     else if (m.filename.startsWith("extra-")) group = "extra";
+                    else if (m.filename.startsWith("plus-")) group = "plus";
                     else if (m.filename.startsWith("main-")) group = "main";
                     else group = "other";
                 }
@@ -236,6 +253,7 @@ ipcMain.handle("load-library", async (event, folderPath) => {
                 let group = "other";
                 if (m.filename.startsWith("banner-")) group = "banner";
                 else if (m.filename.startsWith("extra-")) group = "extra";
+                else if (m.filename.startsWith("plus-")) group = "plus";
                 else if (m.filename.startsWith("main-")) group = "main";
 
                 return { ...m, status: "local", group };
@@ -628,6 +646,8 @@ ipcMain.handle(
         } catch (err) {
             console.error("[Export] Failed:", err.message);
             throw err;
+        } finally {
+            restoreMainWindowFocus();
         }
     },
 );

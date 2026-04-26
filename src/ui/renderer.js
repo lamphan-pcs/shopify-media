@@ -3,6 +3,8 @@ const path = require("path"); // Load path module at top level
 
 // Media type filter state
 let activeMediaType = localStorage.getItem("activeMediaType") || "all";
+let floatingLibraryHidden =
+    localStorage.getItem("floatingLibraryHidden") === "1";
 
 // Pending image reorders: { [handle]: { productId, moves: [{id, newPosition}] } }
 let pendingReorders = {};
@@ -149,6 +151,93 @@ const _dnd = { srcEl: null, srcHandle: null };
 
 let selectedPath = localStorage.getItem("lastPath") || "";
 
+function isLibraryTabActive() {
+    const libraryTab = document.getElementById("tab-library");
+    return !!libraryTab && libraryTab.classList.contains("active");
+}
+
+function updateFloatingLibraryUi() {
+    const isLibrary = isLibraryTabActive();
+    const floatingPanel = document.getElementById("floatingLibraryPanel");
+    const toggleBtn = document.getElementById("floatingLibraryToggle");
+
+    document.body.classList.toggle("library-active", isLibrary);
+    document.body.classList.toggle(
+        "floating-tools-hidden",
+        isLibrary && floatingLibraryHidden,
+    );
+
+    if (floatingPanel) {
+        floatingPanel.classList.toggle("visible", isLibrary);
+        floatingPanel.classList.toggle("hidden-by-user", floatingLibraryHidden);
+    }
+
+    if (toggleBtn) {
+        toggleBtn.classList.toggle("visible", isLibrary);
+        toggleBtn.textContent = floatingLibraryHidden ? "▶ Tools" : "◀ Tools";
+        toggleBtn.title = floatingLibraryHidden
+            ? "Show floating library tools"
+            : "Hide floating library tools";
+    }
+}
+
+function toggleFloatingLibraryPanel() {
+    floatingLibraryHidden = !floatingLibraryHidden;
+    localStorage.setItem(
+        "floatingLibraryHidden",
+        floatingLibraryHidden ? "1" : "0",
+    );
+    updateFloatingLibraryUi();
+}
+
+function recoverLibrarySearchFocusability() {
+    setTimeout(() => {
+        const searchInput = document.getElementById("libSearch");
+        if (!searchInput) return;
+        searchInput.disabled = false;
+        searchInput.readOnly = false;
+        searchInput.style.pointerEvents = "auto";
+
+        if (isLibraryTabActive()) {
+            // Ensure the input can immediately accept typing after native dialogs.
+            searchInput.focus();
+        }
+    }, 30);
+}
+
+// Keep search focus working after native dialogs (alert/confirm/showOpenDialog/showSaveDialog)
+const _nativeAlert = window.alert.bind(window);
+window.alert = (...args) => {
+    _nativeAlert(...args);
+    recoverLibrarySearchFocusability();
+};
+
+const _nativeConfirm = window.confirm.bind(window);
+window.confirm = (...args) => {
+    const result = _nativeConfirm(...args);
+    recoverLibrarySearchFocusability();
+    return result;
+};
+
+window.addEventListener("focus", () => {
+    recoverLibrarySearchFocusability();
+});
+
+document.addEventListener(
+    "pointerdown",
+    (event) => {
+        const searchInput = document.getElementById("libSearch");
+        if (!searchInput || event.target !== searchInput) return;
+
+        setTimeout(() => {
+            if (document.activeElement !== searchInput) {
+                searchInput.focus();
+            }
+        }, 0);
+    },
+    true,
+);
+
 // Set up export progress listener - only once
 ipcRenderer.on("export-progress", (event, progress) => {
     const progressArea = document.getElementById("progressArea");
@@ -197,6 +286,8 @@ document.addEventListener("DOMContentLoaded", () => {
         shipHandles.value = localStorage.getItem("shipHandles") || "";
     if (shipVariantIds)
         shipVariantIds.value = localStorage.getItem("shipVariantIds") || "";
+
+    updateFloatingLibraryUi();
 
     // Restore 5 address rows — migrate legacy single-address keys if needed
     const saved = JSON.parse(localStorage.getItem("shipAddresses") || "null");
@@ -334,11 +425,7 @@ function switchTab(tabName) {
         }
 
         // 5. Trigger Logic
-        // Show/hide floating panel
-        const floatingPanel = document.getElementById("floatingLibraryPanel");
-        if (floatingPanel) {
-            floatingPanel.classList.toggle("visible", tabName === "library");
-        }
+        updateFloatingLibraryUi();
 
         if (tabName === "library") {
             // Slight delay to ensure DOM is painted
@@ -532,6 +619,7 @@ function toggleMediaType(type) {
         main: document.getElementById("mediaTypeMain"),
         banner: document.getElementById("mediaTypeBanner"),
         extra: document.getElementById("mediaTypeExtra"),
+        plus: document.getElementById("mediaTypePlus"),
     };
 
     // Remove active class from all buttons
@@ -557,6 +645,7 @@ function initMediaTypeButtons() {
         main: document.getElementById("mediaTypeMain"),
         banner: document.getElementById("mediaTypeBanner"),
         extra: document.getElementById("mediaTypeExtra"),
+        plus: document.getElementById("mediaTypePlus"),
     };
 
     // Remove active class from all buttons
@@ -626,6 +715,7 @@ function normalizeLayout(layout) {
         main: [...(layout.main || [])],
         banner: [...(layout.banner || [])],
         extra: [...(layout.extra || [])],
+        plus: [...(layout.plus || [])],
         other: [...(layout.other || [])],
     };
 
@@ -639,7 +729,7 @@ function normalizeLayout(layout) {
 }
 
 function buildOriginalLayout(prod) {
-    const groups = { main: [], banner: [], extra: [], other: [] };
+    const groups = { main: [], banner: [], extra: [], plus: [], other: [] };
     const sourceMedia = Array.isArray(prod.media) ? [...prod.media] : [];
 
     sourceMedia.sort((a, b) => {
@@ -670,10 +760,10 @@ function getDisplayLayout(prod) {
     const itemMap = getLayoutItemMap(prod);
     const storedLayout = pendingReorders[prod.handle]?.layout;
     const layout = storedLayout || buildOriginalLayout(prod);
-    const display = { main: [], banner: [], extra: [], other: [] };
+    const display = { main: [], banner: [], extra: [], plus: [], other: [] };
     const used = new Set();
 
-    ["main", "banner", "extra", "other"].forEach((group) => {
+    ["main", "banner", "extra", "plus", "other"].forEach((group) => {
         (layout[group] || []).forEach((key) => {
             const item = itemMap.get(key);
             // Guard: a key that already appeared in an earlier group is not duplicated
@@ -698,7 +788,7 @@ function getDisplayLayout(prod) {
 }
 
 function layoutsEqual(left, right) {
-    const groups = ["main", "banner", "extra", "other"];
+    const groups = ["main", "banner", "extra", "plus", "other"];
     return groups.every((group) => {
         const leftItems = left[group] || [];
         const rightItems = right[group] || [];
@@ -738,7 +828,7 @@ function applyPendingLayoutToCachedProduct(handle, layout) {
     const itemMap = getLayoutItemMap(product);
     const groupAssignments = {};
 
-    ["main", "banner", "extra", "other"].forEach((group) => {
+    ["main", "banner", "extra", "plus", "other"].forEach((group) => {
         (layout[group] || []).forEach((key, index) => {
             groupAssignments[key] = {
                 group,
@@ -1330,17 +1420,34 @@ function renderGallery(products, containerId, showAll = false) {
         return;
     }
 
-    // Limit for performance
-    const limit = showAll ? products.length : 50;
-    const productsToRender = products.slice(0, limit);
+    // In full library view, hide product rows that have no images for the selected media type.
+    let renderableProducts = products;
+    if (containerId === "fullLibraryArea" && activeMediaType !== "all") {
+        renderableProducts = products.filter((prod) => {
+            const groups = getDisplayLayout(prod);
+            const items = groups[activeMediaType] || [];
+            return items.length > 0;
+        });
+    }
 
-    if (products.length > limit) {
+    if (renderableProducts.length === 0) {
+        container.innerHTML += `<div style="padding:20px; text-align:center; color:#666; background:white; border:1px solid #ddd;">No products contain ${activeMediaType} images.</div>`;
+        updateReorderBar();
+        updateRemovalBar();
+        return;
+    }
+
+    // Limit for performance
+    const limit = showAll ? renderableProducts.length : 50;
+    const productsToRender = renderableProducts.slice(0, limit);
+
+    if (renderableProducts.length > limit) {
         const warning = document.createElement("div");
         warning.style.cssText =
             "padding:10px; background:#fff3cd; color:#856404; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;";
         warning.innerHTML = `
-            <span>Showing first ${limit} of ${products.length} products for performance.</span>
-            <button id="btnLoadAll-${containerId}" style="padding:5px 10px; font-size:12px; background:#856404; color:white; border:none; border-radius:4px; cursor:pointer;">Load All (${products.length})</button>
+            <span>Showing first ${limit} of ${renderableProducts.length} products for performance.</span>
+            <button id="btnLoadAll-${containerId}" style="padding:5px 10px; font-size:12px; background:#856404; color:white; border:none; border-radius:4px; cursor:pointer;">Load All (${renderableProducts.length})</button>
         `;
         container.appendChild(warning);
 
@@ -1348,11 +1455,12 @@ function renderGallery(products, containerId, showAll = false) {
         setTimeout(() => {
             const btn = document.getElementById(`btnLoadAll-${containerId}`);
             if (btn) {
-                btn.onclick = () => renderGallery(products, containerId, true);
+                btn.onclick = () =>
+                    renderGallery(renderableProducts, containerId, true);
             }
         }, 0);
-    } else if (showAll && products.length > 50) {
-        container.innerHTML += `<div style="padding:10px; background:#d4edda; color:#155724; margin-bottom:10px;">Showing all ${products.length} products. This may affect performance.</div>`;
+    } else if (showAll && renderableProducts.length > 50) {
+        container.innerHTML += `<div style="padding:10px; background:#d4edda; color:#155724; margin-bottom:10px;">Showing all ${renderableProducts.length} products. This may affect performance.</div>`;
     }
 
     productsToRender.forEach((prod, idx) => {
@@ -1453,6 +1561,7 @@ function renderGallery(products, containerId, showAll = false) {
                         main: [...(baseLayout.main || [])],
                         banner: [...(baseLayout.banner || [])],
                         extra: [...(baseLayout.extra || [])],
+                        plus: [...(baseLayout.plus || [])],
                         other: [...(baseLayout.other || [])],
                     };
                     row.querySelectorAll("[data-dnd-group]").forEach(
@@ -1625,11 +1734,17 @@ function renderGallery(products, containerId, showAll = false) {
                             "width:100px; height:100px; border:1px solid #ddd; border-radius:4px; overflow:hidden; position:relative; background:#f0f0f0;";
                         card.classList.add("media-card");
 
+                        const remoteBindingId =
+                            m.shopifyFileId || m.shopifyId || "";
+                        const isSyntheticPlusAsset =
+                            String(remoteBindingId).startsWith("meta-json:");
+
                         const canDragItem =
                             isDraggable &&
                             canDnd &&
                             m.type === "image" &&
-                            (!!m.shopifyId || !!m.shopifyFileId);
+                            !!remoteBindingId &&
+                            !isSyntheticPlusAsset;
                         if (canDragItem) {
                             card.draggable = true;
                             card.dataset.layoutKey = getMediaLayoutKey(m);
@@ -1660,7 +1775,8 @@ function renderGallery(products, containerId, showAll = false) {
 
                         const canRemove =
                             m.type === "image" &&
-                            (!!m.shopifyId || !!m.shopifyFileId);
+                            !!remoteBindingId &&
+                            !isSyntheticPlusAsset;
                         card.dataset.removable = canRemove ? "true" : "false";
                         const removalKey = (item) =>
                             `${item.group || ""}:${item.src || item.filename}`;
@@ -1764,12 +1880,13 @@ function renderGallery(products, containerId, showAll = false) {
                     (a, b) => (a.position || 0) - (b.position || 0),
                 );
 
-                // Order: Main, Banner, Extra, Other
+                // Order: Main, Banner, Extra, Plus, Other
                 // Filter based on activeMediaType
                 if (activeMediaType === "all") {
                     renderSection("main", "Main Images", groups.main, true);
                     renderSection("banner", "Banners", groups.banner, true);
                     renderSection("extra", "Extras", groups.extra, true);
+                    renderSection("plus", "Plus", groups.plus);
                     renderSection("other", "Other", groups.other);
                 } else if (activeMediaType === "main") {
                     renderSection("main", "Main Images", groups.main, true);
@@ -1777,6 +1894,8 @@ function renderGallery(products, containerId, showAll = false) {
                     renderSection("banner", "Banners", groups.banner, true);
                 } else if (activeMediaType === "extra") {
                     renderSection("extra", "Extras", groups.extra, true);
+                } else if (activeMediaType === "plus") {
+                    renderSection("plus", "Plus", groups.plus);
                 }
 
                 // grid is populated by renderSection (which appends to mainWrapper which is grid)

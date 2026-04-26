@@ -90,6 +90,58 @@ class SyncEngine {
             return `${prefix}${filename}`;
         };
 
+        const isMoreDescriptionMetafield = (metafieldName = "") => {
+            const normalized = String(metafieldName || "")
+                .trim()
+                .toLowerCase();
+
+            return (
+                normalized.endsWith("more_description") ||
+                normalized.endsWith("moredescription")
+            );
+        };
+
+        const extractJsonImageUrls = (rawValue) => {
+            if (!rawValue || typeof rawValue !== "string") return [];
+
+            try {
+                const parsed = JSON.parse(rawValue);
+                if (!Array.isArray(parsed)) return [];
+
+                return parsed
+                    .map((item) => {
+                        if (typeof item === "string") {
+                            return { url: item, alt: "" };
+                        }
+
+                        if (item && typeof item === "object") {
+                            const url =
+                                typeof item.url === "string"
+                                    ? item.url
+                                    : typeof item.src === "string"
+                                      ? item.src
+                                      : "";
+
+                            return {
+                                url,
+                                alt:
+                                    typeof item.alt === "string"
+                                        ? item.alt
+                                        : "",
+                            };
+                        }
+
+                        return { url: "", alt: "" };
+                    })
+                    .filter((item) => item.url);
+            } catch (error) {
+                console.warn(
+                    `[Diff] Skipping invalid JSON metafield value. Error: ${error.message}`,
+                );
+                return [];
+            }
+        };
+
         for (const remoteProd of allProducts) {
             processedHandles.add(remoteProd.handle);
             const handle = remoteProd.handle;
@@ -183,6 +235,21 @@ class SyncEngine {
                             });
                         }
                     }
+                    // JSON image array (e.g. more_description)
+                    else if (isMoreDescriptionMetafield(mfName)) {
+                        const jsonImages = extractJsonImageUrls(node.value);
+                        jsonImages.forEach((img, idx) => {
+                            const cleanUrl = img.url.split("?")[0];
+                            const syntheticId = `meta-json:${node.id || mfName}:${idx}:${cleanUrl}`;
+
+                            targets.push({
+                                id: syntheticId,
+                                _fileId: syntheticId,
+                                url: img.url,
+                                typeGroup: "plus",
+                            });
+                        });
+                    }
                 }
             });
 
@@ -234,6 +301,7 @@ class SyncEngine {
             // Requested Order: Main (skip _pri), then Banner, then Extras.
 
             let extraCounter = 0;
+            let plusCounter = 0;
             let mainCounter = 0;
 
             const finalMediaList = [];
@@ -274,6 +342,19 @@ class SyncEngine {
                 .forEach((t) => {
                     extraCounter++;
                     const prefix = `extra-${String(extraCounter).padStart(
+                        2,
+                        "0",
+                    )}-`;
+                    const filename = getSpecialFilename(t.url, prefix);
+                    finalMediaList.push({ ...t, filename, position: 1 });
+                });
+
+            // Process Plus (e.g. custom.more_description JSON image list)
+            targets
+                .filter((t) => t.typeGroup === "plus")
+                .forEach((t) => {
+                    plusCounter++;
+                    const prefix = `plus-${String(plusCounter).padStart(
                         2,
                         "0",
                     )}-`;
