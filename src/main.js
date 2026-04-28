@@ -125,6 +125,15 @@ function scanDirectoryForProducts(basePath) {
     }
 }
 
+function getMediaGroupFromFilename(filename) {
+    const lower = String(filename || "").toLowerCase();
+    if (lower.startsWith("main-")) return "main";
+    if (lower.startsWith("banner-")) return "banner";
+    if (lower.startsWith("extra-")) return "extra";
+    if (lower.startsWith("plus-")) return "plus";
+    return "other";
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -378,6 +387,112 @@ ipcMain.handle("cleanup-unused-images", async (event, folderPath) => {
 
     return { scanned: scannedCount, deleted: deletedCount };
 });
+
+ipcMain.handle(
+    "export-library-images",
+    async (event, { sourceRoot, selectedTypes }) => {
+        if (!sourceRoot) throw new Error("Source folder is required");
+        if (!fs.existsSync(sourceRoot)) {
+            throw new Error("Source folder does not exist");
+        }
+
+        const { canceled, filePaths } = await dialog.showOpenDialog(
+            mainWindow,
+            {
+                title: "Choose Export Destination Folder",
+                properties: ["openDirectory", "createDirectory"],
+            },
+        );
+
+        if (canceled || !filePaths || !filePaths[0]) {
+            return { success: false, cancelled: true };
+        }
+
+        const destinationRoot = filePaths[0];
+        const imageRegex = /\.(jpg|jpeg|png|gif|webp|bmp|avif|tif|tiff)$/i;
+        const ignoredFolders = new Set([
+            ".git",
+            "node_modules",
+            "src",
+            "utils",
+            "services",
+            "ui",
+            ".vscode",
+            "dist",
+            "build",
+            ".manifest_history",
+        ]);
+
+        const selected = new Set(
+            Array.isArray(selectedTypes) ? selectedTypes : [],
+        );
+        const includeAll = selected.has("all");
+        const includeGroups = includeAll
+            ? new Set(["main", "banner", "extra", "plus", "other"])
+            : selected;
+
+        let copiedFiles = 0;
+        let matchedFiles = 0;
+        let visitedFolders = 0;
+
+        const entries = fs.readdirSync(sourceRoot, { withFileTypes: true });
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (entry.name.startsWith(".")) continue;
+            if (ignoredFolders.has(entry.name)) continue;
+
+            const srcProductFolder = path.join(sourceRoot, entry.name);
+            const destProductFolder = path.join(destinationRoot, entry.name);
+            visitedFolders++;
+
+            let files = [];
+            try {
+                files = fs.readdirSync(srcProductFolder, {
+                    withFileTypes: true,
+                });
+            } catch (err) {
+                console.warn(
+                    `[ExportImages] Skipping unreadable folder ${srcProductFolder}: ${err.message}`,
+                );
+                continue;
+            }
+
+            for (const fileEntry of files) {
+                if (!fileEntry.isFile()) continue;
+                if (!imageRegex.test(fileEntry.name)) continue;
+
+                const group = getMediaGroupFromFilename(fileEntry.name);
+                if (!includeGroups.has(group)) continue;
+
+                matchedFiles++;
+                const srcFile = path.join(srcProductFolder, fileEntry.name);
+                const destFile = path.join(destProductFolder, fileEntry.name);
+
+                try {
+                    fs.mkdirSync(path.dirname(destFile), { recursive: true });
+                    fs.copyFileSync(srcFile, destFile);
+                    copiedFiles++;
+                } catch (err) {
+                    console.warn(
+                        `[ExportImages] Failed to copy ${srcFile}: ${err.message}`,
+                    );
+                }
+            }
+        }
+
+        restoreMainWindowFocus();
+        return {
+            success: true,
+            cancelled: false,
+            destinationRoot,
+            visitedFolders,
+            matchedFiles,
+            copiedFiles,
+            selectedTypes: Array.from(includeGroups),
+        };
+    },
+);
 
 ipcMain.handle(
     "calculate-shipping",

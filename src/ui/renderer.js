@@ -638,6 +638,92 @@ function toggleMediaType(type) {
     filterLibrary();
 }
 
+function getCheckedExportTypes() {
+    const allBox = document.getElementById("exportTypeAll");
+    const mainBox = document.getElementById("exportTypeMain");
+    const bannerBox = document.getElementById("exportTypeBanner");
+    const extraBox = document.getElementById("exportTypeExtra");
+    const plusBox = document.getElementById("exportTypePlus");
+
+    if (allBox && allBox.checked) {
+        return ["all"];
+    }
+
+    const selected = [];
+    if (mainBox && mainBox.checked) selected.push("main");
+    if (bannerBox && bannerBox.checked) selected.push("banner");
+    if (extraBox && extraBox.checked) selected.push("extra");
+    if (plusBox && plusBox.checked) selected.push("plus");
+    return selected;
+}
+
+function syncExportTypeAllBehavior() {
+    const allBox = document.getElementById("exportTypeAll");
+    const subBoxes = [
+        document.getElementById("exportTypeMain"),
+        document.getElementById("exportTypeBanner"),
+        document.getElementById("exportTypeExtra"),
+        document.getElementById("exportTypePlus"),
+    ].filter(Boolean);
+
+    if (!allBox) return;
+
+    if (allBox.checked) {
+        subBoxes.forEach((box) => {
+            box.checked = true;
+            box.disabled = true;
+        });
+    } else {
+        subBoxes.forEach((box) => {
+            box.disabled = false;
+        });
+    }
+}
+
+async function exportCheckedLibraryImages() {
+    if (!selectedPath) {
+        return alert("Please select a source folder first.");
+    }
+
+    const selectedTypes = getCheckedExportTypes();
+    if (!selectedTypes.length) {
+        return alert("Please check at least one image type to export.");
+    }
+
+    const btn = document.getElementById("exportLibraryBtn");
+    const floatBtn = document.getElementById("floatExportBtn");
+    const allBtns = [btn, floatBtn].filter(Boolean);
+    const originalTexts = new Map(allBtns.map((b) => [b, b.textContent]));
+
+    allBtns.forEach((b) => {
+        b.disabled = true;
+        b.textContent = "Exporting...";
+    });
+
+    try {
+        const result = await ipcRenderer.invoke("export-library-images", {
+            sourceRoot: selectedPath,
+            selectedTypes,
+        });
+
+        if (!result || result.cancelled) {
+            return;
+        }
+
+        alert(
+            `Export complete.\n\nDestination: ${result.destinationRoot}\nFolders scanned: ${result.visitedFolders}\nMatched files: ${result.matchedFiles}\nCopied files: ${result.copiedFiles}`,
+        );
+    } catch (err) {
+        console.error("Export images failed:", err);
+        alert("Error exporting images: " + (err.message || String(err)));
+    } finally {
+        allBtns.forEach((b) => {
+            b.disabled = false;
+            b.textContent = originalTexts.get(b) || "Export Images";
+        });
+    }
+}
+
 // Initialize media type button states on page load
 function initMediaTypeButtons() {
     const buttons = {
@@ -659,6 +745,8 @@ function initMediaTypeButtons() {
     if (buttons[activeMediaType]) {
         buttons[activeMediaType].classList.add("active");
     }
+
+    syncExportTypeAllBehavior();
 }
 
 // Call initialization after DOM is loaded

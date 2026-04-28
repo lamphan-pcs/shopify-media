@@ -209,6 +209,10 @@
                 background: #b71c1c;
                 color: #fff;
             }
+            #floatExportBtn {
+                background: #1565c0;
+                color: #fff;
+            }
             #floatPushBtn {
                 background: #008060;
                 color: #fff;
@@ -1095,6 +1099,15 @@
                         📁 Rescan Library
                     </button>
 
+                    <button
+                        onclick="exportCheckedLibraryImages()"
+                        id="exportLibraryBtn"
+                        class="library-action-btn"
+                        title="Export checked image types from all product folders"
+                    >
+                        ⬇ Export Images
+                    </button>
+
                     <!-- Media Type Filter Toggle -->
                     <div class="media-type-filter">
                         <span>Show:</span>
@@ -1144,6 +1157,110 @@
                             margin-top: 15px;
                         "
                     >
+                        <div
+                            style="
+                                display: flex;
+                                gap: 10px;
+                                align-items: center;
+                                flex-wrap: wrap;
+                                padding: 8px 10px;
+                                border: 1px solid #e1e3e5;
+                                border-radius: 8px;
+                                background: #fff;
+                            "
+                        >
+                            <span
+                                style="
+                                    font-size: 0.85em;
+                                    font-weight: 600;
+                                    color: #666;
+                                    text-transform: uppercase;
+                                "
+                                >Export:</span
+                            >
+                            <label
+                                style="
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 4px;
+                                    font-size: 12px;
+                                    color: #444;
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    id="exportTypeAll"
+                                    checked
+                                    onchange="syncExportTypeAllBehavior()"
+                                />
+                                All
+                            </label>
+                            <label
+                                style="
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 4px;
+                                    font-size: 12px;
+                                    color: #444;
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    id="exportTypeMain"
+                                    checked
+                                />
+                                Main
+                            </label>
+                            <label
+                                style="
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 4px;
+                                    font-size: 12px;
+                                    color: #444;
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    id="exportTypeBanner"
+                                    checked
+                                />
+                                Banners
+                            </label>
+                            <label
+                                style="
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 4px;
+                                    font-size: 12px;
+                                    color: #444;
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    id="exportTypeExtra"
+                                    checked
+                                />
+                                Extras
+                            </label>
+                            <label
+                                style="
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 4px;
+                                    font-size: 12px;
+                                    color: #444;
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    id="exportTypePlus"
+                                    checked
+                                />
+                                Plus
+                            </label>
+                        </div>
+
                         <select
                             id="categoryFilter"
                             onchange="filterLibrary()"
@@ -2136,6 +2253,13 @@
                 onclick="cleanupLibrary()"
             >
                 🧹 Clean Up
+            </button>
+            <button
+                id="floatExportBtn"
+                class="float-btn"
+                onclick="exportCheckedLibraryImages()"
+            >
+                ⬇ Export Images
             </button>
             <button
                 id="floatPushBtn"
