@@ -45,7 +45,7 @@ class ManifestManager {
             if (await fs.pathExists(this.manifestPath)) {
                 const backupsDir = path.join(
                     this.rootPath,
-                    ".manifest_history"
+                    ".manifest_history",
                 );
                 await fs.ensureDir(backupsDir);
 
@@ -55,7 +55,7 @@ class ManifestManager {
                     .replace(/[:.]/g, "-");
                 const backupPath = path.join(
                     backupsDir,
-                    `manifest-${timestamp}.json`
+                    `manifest-${timestamp}.json`,
                 );
 
                 await fs.copy(this.manifestPath, backupPath);
@@ -90,12 +90,16 @@ class ManifestManager {
         return this.data.last_synced;
     }
 
-    // Helper to get a map of media ID -> file info for quick diffing
+    // Helper to get a map of "id:group" -> file info for quick diffing.
+    // Keyed by composite so the same Shopify GID can appear in multiple groups
+    // (e.g. main, banner, extra) without entries overwriting each other.
     getMediaMap(handle) {
         const product = this.getProduct(handle);
         const map = new Map();
         if (product && product.media) {
-            product.media.forEach((m) => map.set(m.id, m));
+            product.media.forEach((m) =>
+                map.set(`${m.id}:${m.group || ""}`, m),
+            );
         }
         return map;
     }

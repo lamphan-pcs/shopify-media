@@ -366,61 +366,55 @@ class SyncEngine {
             let positionCounter = 0;
             for (const media of finalMediaList) {
                 positionCounter++;
-                const filename = media.filename;
-                const destFile = path.join(destFolder, filename);
+                let filename = media.filename;
                 const url = media.url;
                 const type = media.originalType || "image"; // Default to image for banners/extras
 
                 // Diff Logic
                 let status = "unchanged";
-                // Look for existing entry in manifest by ID (or fileId)
-                // Note: ID for banners is Metafield ID. ID for main is Media ID.
-                const localMedia = localMediaMap.get(media.id);
+                // Look up by composite "id:group" so the same Shopify GID used
+                // in multiple groups (main, banner, extra) resolves independently.
+                const localMedia = localMediaMap.get(
+                    `${media.id}:${media.typeGroup || ""}`,
+                );
 
                 if (!localMedia) {
                     // NEW
                     status = "new";
-                    downloadQueue.push({ url, destPath: destFile });
+                    downloadQueue.push({
+                        url,
+                        destPath: path.join(destFolder, filename),
+                    });
                     this.changes.push({
                         product: handle,
                         type: "NEW_ASSET",
                         file: filename,
                     });
+                } else if (
+                    media._fileId &&
+                    localMedia._fileId &&
+                    media._fileId !== localMedia._fileId
+                ) {
+                    // Content updated — download to the newly computed filename
+                    status = "updated";
+                    downloadQueue.push({
+                        url,
+                        destPath: path.join(destFolder, filename),
+                    });
+                    this.changes.push({
+                        product: handle,
+                        type: "UPDATED_ASSET",
+                        file: filename,
+                    });
                 } else {
-                    // Check if content changed (filename check, or fileId check)
-                    // If filename changed (due to rename logic/index shift), it's effectively a new file for FS
-                    // But if ID matches, checking _fileId ensures we don't re-download if same content
-                    // However, we mandated specific names. If name changes, we must download to new name.
-                    // And cleanup old name.
-                    // Our 'localMedia' has 'filename'.
-
-                    if (localMedia.filename !== filename) {
-                        // Rename / Reorder occurred
-                        status = "updated"; // or moved
-                        this.changes.push({
-                            product: handle,
-                            type: "REORDERED",
-                            file: filename,
-                        });
-                        // Must download to new name
-                        // Check if file physically exists at OLD name?
-                        // If we strictly mirror specific names, better to just download new and let cleanup handle old.
-                        downloadQueue.push({ url, destPath: destFile });
-                    } else if (
-                        media._fileId &&
-                        localMedia._fileId &&
-                        media._fileId !== localMedia._fileId
-                    ) {
-                        // Content updated
-                        status = "updated";
-                        downloadQueue.push({ url, destPath: destFile });
-                        this.changes.push({
-                            product: handle,
-                            type: "UPDATED_ASSET",
-                            file: filename,
-                        });
-                    }
+                    // Same content (_fileId matches or unknown).
+                    // Keep the existing filename regardless of computed name — position-counter
+                    // shifts (due to API ordering variance or items added elsewhere) must not
+                    // trigger re-downloads or false REORDERED reports.
+                    filename = localMedia.filename;
                 }
+
+                const destFile = path.join(destFolder, filename);
 
                 newMediaList.push({
                     id: media.id,
@@ -454,12 +448,14 @@ class SyncEngine {
 
             // Check for Deleted (Items in manifest not in current finalMediaList)
             if (localMediaMap.size > 0) {
-                const currentIds = new Set(newMediaList.map((m) => m.id));
-                // Also check by filename to avoid deleting just-renamed files if we could handle rename?
-                // But simplified: delete anything not in current target list.
+                // Use composite keys so a GID that moved groups is deleted from
+                // the old group entry rather than kept as a false match.
+                const currentKeys = new Set(
+                    newMediaList.map((m) => `${m.id}:${m.group || ""}`),
+                );
 
-                for (const [id, val] of localMediaMap) {
-                    if (!currentIds.has(id)) {
+                for (const [key, val] of localMediaMap) {
+                    if (!currentKeys.has(key)) {
                         this.changes.push({
                             product: handle,
                             type: "DELETED_ASSET",
@@ -490,8 +486,14 @@ class SyncEngine {
             // Detect Reordering
             // Compare the ID sequence of newMediaList vs localProd.media
             if (localProd && localProd.media) {
-                const oldIds = localProd.media.map((m) => m.id).join(",");
-                const newIds = newMediaList.map((m) => m.id).join(",");
+                // Compare using composite "id:group" keys so a same-GID
+                // multi-group image doesn't trigger false reorder detections.
+                const oldIds = localProd.media
+                    .map((m) => `${m.id}:${m.group || ""}`)
+                    .join(",");
+                const newIds = newMediaList
+                    .map((m) => `${m.id}:${m.group || ""}`)
+                    .join(",");
                 if (oldIds !== newIds && oldIds.length > 0) {
                     this.changes.push({
                         product: handle,
@@ -590,6 +592,8 @@ class SyncEngine {
         if (!this.config.dryRun) {
             this.manifest.setLastSync(currentTimestamp);
             await this.manifest.save();
+            // Auto-clean orphaned local files that are no longer in the manifest
+            await this._cleanupOrphanedFiles(onProgress);
         }
 
         await this._generateReport(); // Create CSV
@@ -602,6 +606,78 @@ class SyncEngine {
             updatedCount: allProducts.length,
             downloadCount: downloadQueue.length,
         };
+    }
+
+    async _cleanupOrphanedFiles(onProgress) {
+        const ignoredFolders = new Set([
+            ".git",
+            "node_modules",
+            "src",
+            "utils",
+            "services",
+            "ui",
+            ".vscode",
+            "dist",
+            "build",
+            ".manifest_history",
+        ]);
+        const mediaRegex = /\.(jpg|jpeg|png|gif|mp4|mov|webp)$/i;
+        const allProducts = this.manifest.getAllProducts();
+
+        // Build folderName → valid filenames map
+        const validByFolder = new Map();
+        for (const product of Object.values(allProducts)) {
+            const key = product.folderName || product.handle;
+            if (!key) continue;
+            validByFolder.set(
+                key,
+                new Set((product.media || []).map((m) => m.filename)),
+            );
+        }
+
+        let deleted = 0;
+        let entries;
+        try {
+            entries = await fs.readdir(this.config.downloadPath, {
+                withFileTypes: true,
+            });
+        } catch {
+            return;
+        }
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (entry.name.startsWith(".")) continue;
+            if (ignoredFolders.has(entry.name)) continue;
+
+            const productPath = path.join(this.config.downloadPath, entry.name);
+            const validFilenames = validByFolder.get(entry.name) || new Set();
+
+            let files;
+            try {
+                files = await fs.readdir(productPath);
+            } catch {
+                continue;
+            }
+
+            for (const file of files) {
+                if (!mediaRegex.test(file)) continue;
+                if (!validFilenames.has(file)) {
+                    try {
+                        await fs.remove(path.join(productPath, file));
+                        deleted++;
+                    } catch (err) {
+                        console.error(
+                            `[Cleanup] Failed to remove ${file}: ${err.message}`,
+                        );
+                    }
+                }
+            }
+        }
+
+        if (deleted > 0) {
+            console.log(`[Cleanup] Auto-removed ${deleted} orphaned file(s).`);
+        }
     }
 
     async _generateReport() {

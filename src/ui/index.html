@@ -575,6 +575,143 @@
                 opacity: 0.5;
                 cursor: not-allowed;
             }
+            .product-push-plus-btn {
+                height: 34px;
+                padding: 0 10px;
+                border-radius: 8px;
+                border: 1px solid #d0d7de;
+                background: #fff;
+                color: #1f2937;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .product-push-plus-btn:hover {
+                border-color: #008060;
+                background: #f3fbf8;
+                color: #008060;
+            }
+            .product-push-plus-btn.active {
+                background: #008060;
+                color: #fff;
+                border-color: #006b4d;
+            }
+            .lib-pp-panel {
+                display: none;
+                margin-top: 12px;
+                padding: 12px;
+                border: 1px dashed #008060;
+                border-radius: 6px;
+                background: #f7fdfb;
+            }
+            .lib-pp-panel.open {
+                display: block;
+            }
+            .lib-pp-panel-label {
+                font-size: 11px;
+                color: #555;
+                margin-bottom: 8px;
+            }
+            .lib-pp-strip {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 7px;
+                margin-bottom: 10px;
+                min-height: 60px;
+            }
+            .lib-pp-thumb {
+                position: relative;
+                width: 64px;
+                height: 64px;
+                border-radius: 5px;
+                overflow: hidden;
+                border: 2px solid transparent;
+                cursor: pointer;
+                flex-shrink: 0;
+                transition:
+                    border-color 0.12s,
+                    opacity 0.12s;
+            }
+            .lib-pp-thumb img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                pointer-events: none;
+            }
+            .lib-pp-thumb .lib-pp-badge {
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                font-size: 8px;
+                font-weight: 700;
+                text-transform: uppercase;
+                background: rgba(0, 0, 0, 0.55);
+                color: #fff;
+                border-radius: 3px;
+                padding: 1px 3px;
+            }
+            .lib-pp-thumb .lib-pp-order {
+                position: absolute;
+                bottom: 2px;
+                right: 3px;
+                font-size: 10px;
+                font-weight: 700;
+                background: rgba(0, 128, 96, 0.9);
+                color: #fff;
+                border-radius: 3px;
+                padding: 1px 3px;
+                display: none;
+            }
+            .lib-pp-thumb.selected {
+                border-color: #008060;
+            }
+            .lib-pp-thumb.selected .lib-pp-order {
+                display: block;
+            }
+            .lib-pp-thumb:not(.selected) {
+                opacity: 0.6;
+            }
+            .lib-pp-thumb.dragging {
+                opacity: 0.25;
+            }
+            .lib-pp-strip.drag-over {
+                outline: 2px dashed #008060;
+            }
+            .lib-pp-footer {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .lib-pp-push-btn {
+                padding: 5px 16px;
+                background: #008060;
+                color: #fff;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            .lib-pp-push-btn:hover {
+                background: #006b4d;
+            }
+            .lib-pp-push-btn:disabled {
+                background: #aaa;
+                cursor: default;
+            }
+            .lib-pp-result {
+                font-size: 12px;
+                font-weight: 600;
+            }
+            .lib-pp-result.ok {
+                color: #008060;
+            }
+            .lib-pp-result.err {
+                color: #c0392b;
+            }
             .product-title {
                 font-weight: 600;
                 color: #202223;
@@ -756,6 +893,199 @@
                 background: #ffe3e3;
                 color: #8a0b0b;
             }
+
+            /* Push Plus Tab */
+            .pp-card {
+                background: #fff;
+                border: 1px solid #e1e3e5;
+                border-radius: 8px;
+                padding: 14px 16px;
+                margin-bottom: 14px;
+            }
+            .pp-card-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 10px;
+            }
+            .pp-card-title {
+                font-weight: 700;
+                font-size: 14px;
+                color: #1a1a1a;
+            }
+            .pp-card-meta {
+                font-size: 12px;
+                color: #888;
+                margin-left: 8px;
+            }
+            .pp-img-strip {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin-bottom: 12px;
+                min-height: 72px;
+                padding: 6px;
+                border: 2px dashed #e1e3e5;
+                border-radius: 6px;
+            }
+            .pp-img-strip.drag-over {
+                border-color: #008060;
+                background: #f0faf6;
+            }
+            .pp-thumb {
+                position: relative;
+                width: 70px;
+                height: 70px;
+                border-radius: 5px;
+                overflow: hidden;
+                border: 2px solid transparent;
+                cursor: pointer;
+                transition:
+                    border-color 0.12s,
+                    opacity 0.12s;
+                flex-shrink: 0;
+                user-select: none;
+            }
+            .pp-thumb img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                pointer-events: none;
+            }
+            .pp-thumb .pp-thumb-badge {
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                font-size: 9px;
+                font-weight: 700;
+                text-transform: uppercase;
+                background: rgba(0, 0, 0, 0.55);
+                color: #fff;
+                border-radius: 3px;
+                padding: 1px 4px;
+            }
+            .pp-thumb .pp-thumb-order {
+                position: absolute;
+                bottom: 2px;
+                right: 4px;
+                font-size: 11px;
+                font-weight: 700;
+                background: rgba(0, 128, 96, 0.85);
+                color: #fff;
+                border-radius: 3px;
+                padding: 1px 4px;
+                display: none;
+            }
+            .pp-thumb.selected {
+                border-color: #008060;
+            }
+            .pp-thumb.selected .pp-thumb-order {
+                display: block;
+            }
+            .pp-thumb:not(.selected) {
+                opacity: 0.65;
+            }
+            .pp-thumb.dragging {
+                opacity: 0.3;
+            }
+            .pp-source-label {
+                font-size: 11px;
+                color: #888;
+                margin-bottom: 4px;
+            }
+            .pp-push-btn {
+                padding: 6px 18px;
+                background: #008060;
+                color: #fff;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            .pp-push-btn:hover {
+                background: #006b4d;
+            }
+            .pp-push-btn:disabled {
+                background: #aaa;
+                cursor: default;
+            }
+            .pp-result {
+                font-size: 12px;
+                margin-left: 10px;
+                font-weight: 600;
+            }
+            .pp-result.ok {
+                color: #008060;
+            }
+            .pp-result.err {
+                color: #c0392b;
+            }
+
+            /* Product numpad sidebar */
+            .product-numpad {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 6px;
+                padding: 10px 8px;
+                border-left: 1px solid #e1e3e5;
+                margin-left: 14px;
+                min-width: 108px;
+                flex-shrink: 0;
+            }
+            .numpad-label {
+                font-size: 10px;
+                font-weight: 700;
+                color: #888;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                margin-bottom: 2px;
+            }
+            .numpad-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 4px;
+            }
+            .numpad-btn {
+                width: 28px;
+                height: 28px;
+                padding: 0;
+                border-radius: 5px;
+                border: 1px solid #ccc;
+                background: #f5f5f5;
+                color: #333;
+                font-size: 11px;
+                font-weight: 600;
+                cursor: pointer;
+                transition:
+                    background 0.12s,
+                    border-color 0.12s,
+                    color 0.12s;
+                line-height: 1;
+            }
+            .numpad-btn:hover {
+                border-color: #008060;
+                background: #f0faf6;
+            }
+            .numpad-btn.selected {
+                background: #008060;
+                border-color: #006b4d;
+                color: #fff;
+            }
+            .numpad-clear-btn {
+                font-size: 10px;
+                padding: 3px 8px;
+                background: #f1f2f3;
+                color: #555;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                cursor: pointer;
+                width: 100%;
+            }
+            .numpad-clear-btn:hover {
+                background: #e5e5e5;
+            }
         </style>
     </head>
     <body>
@@ -771,6 +1101,9 @@
                 </div>
                 <div class="tab-btn" onclick="switchTab('shipping')">
                     Shipping Calculator
+                </div>
+                <div class="tab-btn" onclick="switchTab('pushplus')">
+                    Push Plus
                 </div>
             </div>
 
@@ -1108,6 +1441,24 @@
                         ⬇ Export Images
                     </button>
 
+                    <button
+                        onclick="exportPlusContent()"
+                        id="exportPlusBtn"
+                        class="library-action-btn"
+                        title="Export a CSV of all Plus (more_description) image URLs"
+                    >
+                        📋 Export Plus CSV
+                    </button>
+
+                    <button
+                        onclick="exportNumpadSelections()"
+                        id="exportNumpadBtn"
+                        class="library-action-btn"
+                        title="Export numpad number selections per product as CSV"
+                    >
+                        🔢 Export Numpad CSV
+                    </button>
+
                     <!-- Media Type Filter Toggle -->
                     <div class="media-type-filter">
                         <span>Show:</span>
@@ -1377,6 +1728,99 @@
                 </div>
             </div>
             <!-- End tab-library -->
+
+            <!-- Push Plus Tab -->
+            <div id="tab-pushplus" class="tab-content">
+                <div
+                    style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        margin-bottom: 14px;
+                        flex-wrap: wrap;
+                        gap: 10px;
+                    "
+                >
+                    <div>
+                        <strong style="font-size: 15px"
+                            >Push Plus Content</strong
+                        >
+                        <span
+                            style="
+                                color: #666;
+                                font-size: 13px;
+                                margin-left: 10px;
+                            "
+                            >Products shown have 0 plus images. Select images
+                            &rarr; reorder &rarr; push.</span
+                        >
+                    </div>
+                    <button
+                        class="library-action-btn"
+                        onclick="renderPushPlusTab()"
+                        style="min-width: 120px"
+                    >
+                        🔄 Refresh
+                    </button>
+                </div>
+                <div
+                    style="
+                        display: flex;
+                        gap: 10px;
+                        align-items: center;
+                        margin-bottom: 12px;
+                        flex-wrap: wrap;
+                    "
+                >
+                    <select
+                        id="ppCategoryFilter"
+                        class="library-select"
+                        onchange="renderPushPlusTab()"
+                    >
+                        <option value="">All Categories</option>
+                        <option value="skin-science">skin-science</option>
+                        <option value="cosmetic-and-glam">
+                            cosmetic-and-glam
+                        </option>
+                        <option value="masks-and-patches">
+                            masks-and-patches
+                        </option>
+                        <option value="makeup-tools-and-brushes">
+                            makeup-tools-and-brushes
+                        </option>
+                        <option value="care-tools-and-brushes">
+                            care-tools-and-brushes
+                        </option>
+                        <option value="hair-and-body-care">
+                            hair-and-body-care
+                        </option>
+                        <option value="lash-collections">
+                            lash-collections
+                        </option>
+                        <option value="beauty-devices">beauty-devices</option>
+                        <option value="hair-accessories">
+                            hair-accessories
+                        </option>
+                        <option value="pro-and-diy-nail">
+                            pro-and-diy-nail
+                        </option>
+                        <option value="kid-product">kid-product</option>
+                        <option value="ruby-vibe-co-gift-set">
+                            ruby-vibe-co-gift-set
+                        </option>
+                    </select>
+                    <input
+                        type="text"
+                        id="ppSearch"
+                        placeholder="Search products..."
+                        class="library-search-input"
+                        oninput="renderPushPlusTab()"
+                        style="flex: 1; min-width: 180px"
+                    />
+                </div>
+                <div id="pushPlusStatus" style="margin-bottom: 10px"></div>
+                <div id="pushPlusContainer"></div>
+            </div>
 
             <!-- Shipping Calculator Tab -->
             <div id="tab-shipping" class="tab-content">

@@ -499,13 +499,38 @@ class ShopifyClient {
         }
 
         const selectedMediaIds = new Set(
-            selectedImages.map((item) => item.mediaId).filter(Boolean),
+            selectedImages
+                .filter(
+                    (item) =>
+                        !String(item.syntheticId || "").startsWith(
+                            "meta-json:",
+                        ),
+                )
+                .map((item) => item.mediaId)
+                .filter(Boolean),
         );
         const selectedFileIds = new Set(
-            selectedImages.map((item) => item.fileId).filter(Boolean),
+            selectedImages
+                .filter(
+                    (item) =>
+                        !String(item.syntheticId || "").startsWith(
+                            "meta-json:",
+                        ),
+                )
+                .map((item) => item.fileId)
+                .filter(Boolean),
         );
+        // Exclude synthetic plus items from filename matching — their `plus-NN-` prefixed
+        // filenames would otherwise accidentally match the same image in main/banner/extra
+        // via the `filename.endsWith("-basename.jpg")` heuristic.
         const selectedFilenames = new Set(
             selectedImages
+                .filter(
+                    (item) =>
+                        !String(item.syntheticId || "").startsWith(
+                            "meta-json:",
+                        ),
+                )
                 .map((item) => String(item.filename || "").toLowerCase())
                 .filter(Boolean),
         );
@@ -561,9 +586,64 @@ class ShopifyClient {
         const metafieldsToSet = [];
         const metafieldsToDelete = [];
 
+        // Build a set of CDN URLs to remove for plus (synthetic) items
+        const syntheticUrlsToRemove = new Set(
+            selectedImages
+                .map((item) => {
+                    const sid = String(item.syntheticId || "");
+                    if (!sid.startsWith("meta-json:")) return null;
+                    const urlStart = sid.indexOf("https://");
+                    return urlStart >= 0 ? sid.slice(urlStart) : null;
+                })
+                .filter(Boolean),
+        );
+
         parsedKeys.forEach(({ namespace, key }, index) => {
             const metafield = product[`mf_${index}`];
             if (!metafield?.type) return;
+
+            // Handle JSON image array (more_description / plus)
+            if (metafield.type === "multi_line_text_field") {
+                if (syntheticUrlsToRemove.size === 0) return;
+                let items = [];
+                try {
+                    items = JSON.parse(metafield.value || "[]");
+                } catch {
+                    return;
+                }
+                if (!Array.isArray(items)) return;
+                const remaining = items.filter((item) => {
+                    const url = String(item.url || item.src || "").split(
+                        "?",
+                    )[0];
+                    for (const removeUrl of syntheticUrlsToRemove) {
+                        if (
+                            url === removeUrl ||
+                            removeUrl.startsWith(url) ||
+                            url.startsWith(removeUrl)
+                        )
+                            return false;
+                    }
+                    return true;
+                });
+                if (remaining.length === items.length) return; // nothing to remove
+                if (remaining.length === 0) {
+                    metafieldsToDelete.push({
+                        ownerId: product.id,
+                        namespace,
+                        key,
+                    });
+                } else {
+                    metafieldsToSet.push({
+                        ownerId: product.id,
+                        namespace,
+                        key,
+                        type: "multi_line_text_field",
+                        value: JSON.stringify(remaining),
+                    });
+                }
+                return;
+            }
 
             if (metafield.type === "file_reference") {
                 const reference = metafield.reference;
@@ -680,11 +760,15 @@ class ShopifyClient {
         // Covers: gid://shopify/ImageSource/N  →  gid://shopify/MediaImage/N
         //         raw numeric strings           →  gid://shopify/MediaImage/N
         const imageSourceToMediaImage = new Map();
+        const gidToUrl = new Map();
         const addNodeToMap = (node) => {
             if (!node || !node.id) return;
             const mediaGid = node.id; // gid://shopify/MediaImage/N
             if (node.image?.id) {
                 imageSourceToMediaImage.set(node.image.id, mediaGid);
+            }
+            if (node.image?.originalSrc) {
+                gidToUrl.set(mediaGid, node.image.originalSrc.split("?")[0]);
             }
             const numericMatch = String(mediaGid).match(/(\d+)$/);
             if (numericMatch) {
@@ -847,6 +931,45 @@ class ShopifyClient {
                     type: "list.file_reference",
                     value: JSON.stringify(desiredExtraIds),
                 });
+            }
+        }
+
+        // Handle plus (more_description) — reorder or cross-group changes
+        if (layout.plus !== undefined) {
+            const plusKeyEntry = parsedKeysForNorm.find(({ key }) =>
+                String(key).toLowerCase().includes("more_description"),
+            );
+            if (plusKeyEntry) {
+                const desiredPlusUrls = (layout.plus || [])
+                    .map((item) => {
+                        const id = item.fileId || "";
+                        if (String(id).startsWith("meta-json:")) {
+                            const urlStart = id.indexOf("https://");
+                            return urlStart >= 0 ? id.slice(urlStart) : null;
+                        }
+                        // Real MediaImage GID — look up its CDN URL
+                        const canonicalGid = normalizeId(id);
+                        return gidToUrl.get(canonicalGid) || null;
+                    })
+                    .filter(Boolean);
+
+                if (desiredPlusUrls.length === 0) {
+                    metafieldsToDelete.push({
+                        ownerId: product.id,
+                        namespace: plusKeyEntry.namespace,
+                        key: plusKeyEntry.key,
+                    });
+                } else {
+                    metafieldsToSet.push({
+                        ownerId: product.id,
+                        namespace: plusKeyEntry.namespace,
+                        key: plusKeyEntry.key,
+                        type: "multi_line_text_field",
+                        value: JSON.stringify(
+                            desiredPlusUrls.map((url) => ({ url, alt: "" })),
+                        ),
+                    });
+                }
             }
         }
 

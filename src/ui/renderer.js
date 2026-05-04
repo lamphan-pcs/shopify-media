@@ -1,8 +1,36 @@
 const { ipcRenderer } = require("electron");
 const path = require("path"); // Load path module at top level
 
-// Media type filter state
-let activeMediaType = localStorage.getItem("activeMediaType") || "all";
+// Numpad selections: { [handle]: Set<number> }
+function _loadNumpadSelections() {
+    try {
+        const raw = localStorage.getItem("productNumpadSelections");
+        if (!raw) return {};
+        const plain = JSON.parse(raw); // { handle: [n, n, ...] }
+        const result = {};
+        for (const [h, arr] of Object.entries(plain)) {
+            result[h] = new Set(arr);
+        }
+        return result;
+    } catch {
+        return {};
+    }
+}
+function _saveNumpadSelections() {
+    const plain = {};
+    for (const [h, s] of Object.entries(productNumpadSelections)) {
+        if (s.size > 0) plain[h] = [...s];
+    }
+    localStorage.setItem("productNumpadSelections", JSON.stringify(plain));
+}
+let productNumpadSelections = _loadNumpadSelections();
+
+// Media type filter state — multi-select Set of active types
+const _allMediaTypes = ["main", "banner", "extra", "plus"];
+const _savedMediaTypes = localStorage.getItem("activeMediaTypes");
+let activeMediaTypes = _savedMediaTypes
+    ? new Set(JSON.parse(_savedMediaTypes))
+    : new Set(_allMediaTypes);
 let floatingLibraryHidden =
     localStorage.getItem("floatingLibraryHidden") === "1";
 
@@ -435,6 +463,10 @@ function switchTab(tabName) {
                 loadLocalLibrary(true);
             }, 50);
         }
+
+        if (tabName === "pushplus") {
+            setTimeout(() => renderPushPlusTab(), 50);
+        }
     } catch (e) {
         console.error("Error in switchTab:", e);
         alert("Error switching tab: " + e.message);
@@ -610,31 +642,25 @@ function filterLibrary() {
 }
 
 function toggleMediaType(type) {
-    activeMediaType = type;
-    localStorage.setItem("activeMediaType", type);
-
-    // Update button styles using classList instead of inline styles
-    const buttons = {
-        all: document.getElementById("mediaTypeAll"),
-        main: document.getElementById("mediaTypeMain"),
-        banner: document.getElementById("mediaTypeBanner"),
-        extra: document.getElementById("mediaTypeExtra"),
-        plus: document.getElementById("mediaTypePlus"),
-    };
-
-    // Remove active class from all buttons
-    Object.values(buttons).forEach((btn) => {
-        if (btn) {
-            btn.classList.remove("active");
+    if (type === "all") {
+        // "All" resets to showing every type
+        activeMediaTypes = new Set(_allMediaTypes);
+    } else {
+        if (activeMediaTypes.has(type)) {
+            activeMediaTypes.delete(type);
+            // If nothing left selected, restore all
+            if (activeMediaTypes.size === 0) {
+                activeMediaTypes = new Set(_allMediaTypes);
+            }
+        } else {
+            activeMediaTypes.add(type);
         }
-    });
-
-    // Add active class to the selected button
-    if (buttons[type]) {
-        buttons[type].classList.add("active");
     }
-
-    // Re-render the gallery with the new filter
+    localStorage.setItem(
+        "activeMediaTypes",
+        JSON.stringify([...activeMediaTypes]),
+    );
+    initMediaTypeButtons();
     filterLibrary();
 }
 
@@ -677,6 +703,567 @@ function syncExportTypeAllBehavior() {
         subBoxes.forEach((box) => {
             box.disabled = false;
         });
+    }
+}
+
+// ============ PUSH PLUS TAB ============
+
+function _buildLibPushPlusPanel(panel, prod) {
+    const shopUrl = localStorage.getItem("lastShop") || "";
+    const apiKey = localStorage.getItem("lastKey") || "";
+    const metafieldsStr = localStorage.getItem("lastMetafields") || "";
+    const hasCredentials = shopUrl && apiKey;
+
+    const layout = getDisplayLayout(prod);
+
+    // Collect candidates from main / banner / extra
+    const candidates = [];
+    const addGroup = (items, groupLabel) => {
+        (items || []).forEach((item) => {
+            const gid = item.shopifyId || item.shopifyFileId || "";
+            if (!item.src || !gid) return;
+            candidates.push({
+                id: gid,
+                group: groupLabel,
+                displayUrl: "file://" + item.src.replace(/\\/g, "/"),
+            });
+        });
+    };
+    addGroup(layout.main, "main");
+    addGroup(layout.banner, "banner");
+    addGroup(layout.extra, "extra");
+
+    if (candidates.length === 0) {
+        panel.innerHTML =
+            '<div style="color:#888;font-size:12px;">No main/banner/extra images with Shopify GIDs found. Sync first.</div>';
+        return;
+    }
+
+    const existingPlusCount = layout.plus ? layout.plus.length : 0;
+
+    const label = document.createElement("div");
+    label.className = "lib-pp-panel-label";
+    label.textContent =
+        existingPlusCount > 0
+            ? `Click images to select (ordered). Drag to reorder. Will append to ${existingPlusCount} existing plus image(s).`
+            : "Click images to select (in order). Drag to reorder. Selected images will be pushed as plus content.";
+    panel.appendChild(label);
+
+    const strip = document.createElement("div");
+    strip.className = "lib-pp-strip";
+
+    let selectedOrder = []; // candidate indices
+
+    const footer = document.createElement("div");
+    footer.className = "lib-pp-footer";
+
+    const resultSpan = document.createElement("span");
+    resultSpan.className = "lib-pp-result";
+
+    const pushBtn = document.createElement("button");
+    pushBtn.className = "lib-pp-push-btn";
+    pushBtn.textContent =
+        existingPlusCount > 0 ? "Append to Shopify" : "Push to Shopify";
+    pushBtn.disabled = true;
+    if (!hasCredentials)
+        pushBtn.title = "Enter Shop URL and API key in the dashboard first";
+
+    const refreshOrder = () => {
+        strip.querySelectorAll(".lib-pp-thumb").forEach((thumb) => {
+            const idx = parseInt(thumb.dataset.idx);
+            const pos = selectedOrder.indexOf(idx);
+            const ob = thumb.querySelector(".lib-pp-order");
+            if (pos >= 0) {
+                thumb.classList.add("selected");
+                if (ob) ob.textContent = pos + 1;
+            } else {
+                thumb.classList.remove("selected");
+            }
+        });
+        const n = selectedOrder.length;
+        pushBtn.textContent =
+            n > 0
+                ? `${existingPlusCount > 0 ? "Append" : "Push"} ${n} image(s)`
+                : existingPlusCount > 0
+                  ? "Append to Shopify"
+                  : "Push to Shopify";
+        pushBtn.disabled = !hasCredentials || n === 0;
+    };
+
+    let dragSrc = null;
+    candidates.forEach((cand, idx) => {
+        const thumb = document.createElement("div");
+        thumb.className = "lib-pp-thumb";
+        thumb.dataset.idx = idx;
+        thumb.draggable = true;
+
+        const img = document.createElement("img");
+        img.src = cand.displayUrl;
+        img.alt = cand.group;
+        img.loading = "lazy";
+
+        const badge = document.createElement("span");
+        badge.className = "lib-pp-badge";
+        badge.textContent = cand.group;
+
+        const orderBadge = document.createElement("span");
+        orderBadge.className = "lib-pp-order";
+
+        thumb.appendChild(img);
+        thumb.appendChild(badge);
+        thumb.appendChild(orderBadge);
+
+        thumb.addEventListener("click", () => {
+            const pos = selectedOrder.indexOf(idx);
+            if (pos >= 0) selectedOrder.splice(pos, 1);
+            else selectedOrder.push(idx);
+            refreshOrder();
+        });
+
+        thumb.addEventListener("dragstart", (e) => {
+            if (!thumb.classList.contains("selected")) {
+                e.preventDefault();
+                return;
+            }
+            dragSrc = idx;
+            thumb.classList.add("dragging");
+            e.dataTransfer.effectAllowed = "move";
+        });
+        thumb.addEventListener("dragend", () => {
+            thumb.classList.remove("dragging");
+            strip.classList.remove("drag-over");
+        });
+        thumb.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            strip.classList.add("drag-over");
+        });
+        thumb.addEventListener("dragleave", () =>
+            strip.classList.remove("drag-over"),
+        );
+        thumb.addEventListener("drop", (e) => {
+            e.preventDefault();
+            strip.classList.remove("drag-over");
+            if (dragSrc === null || dragSrc === idx) return;
+            const from = selectedOrder.indexOf(dragSrc);
+            const to = selectedOrder.indexOf(idx);
+            if (from < 0 || to < 0) return;
+            selectedOrder.splice(from, 1);
+            selectedOrder.splice(to, 0, dragSrc);
+            dragSrc = null;
+            refreshOrder();
+        });
+
+        strip.appendChild(thumb);
+    });
+
+    panel.appendChild(strip);
+
+    pushBtn.addEventListener("click", async () => {
+        if (selectedOrder.length === 0) return;
+        const mediaIds = selectedOrder
+            .map((i) => candidates[i].id)
+            .filter(Boolean);
+        if (!mediaIds.length) {
+            resultSpan.className = "lib-pp-result err";
+            resultSpan.textContent = "No Shopify GIDs available.";
+            return;
+        }
+        pushBtn.disabled = true;
+        pushBtn.textContent = "Pushing...";
+        resultSpan.textContent = "";
+        try {
+            const result = await ipcRenderer.invoke("set-plus-metafield", {
+                shopUrl,
+                apiKey,
+                metafields: metafieldsStr,
+                handle: prod.handle,
+                mediaIds,
+                append: true,
+            });
+            resultSpan.className = "lib-pp-result ok";
+            resultSpan.textContent = `✓ ${result.appended ? "Appended" : "Pushed"} ${result.count} image(s) (total: ${result.total})`;
+            pushBtn.textContent = "Done!";
+        } catch (err) {
+            console.error("[LibPushPlus] Failed:", err);
+            resultSpan.className = "lib-pp-result err";
+            resultSpan.textContent = `✗ ${err.message}`;
+            pushBtn.disabled = false;
+            refreshOrder();
+        }
+    });
+
+    footer.appendChild(pushBtn);
+    footer.appendChild(resultSpan);
+    panel.appendChild(footer);
+}
+
+function renderPushPlusTab() {
+    const container = document.getElementById("pushPlusContainer");
+    const statusEl = document.getElementById("pushPlusStatus");
+    if (!container) return;
+
+    if (!cachedLibrary || cachedLibrary.length === 0) {
+        container.innerHTML =
+            '<div style="color:#888; padding:20px;">No library loaded. Go to Full Library tab and click Rescan first.</div>';
+        return;
+    }
+
+    // Filter to products with 0 plus images
+    const query = (
+        document.getElementById("ppSearch")?.value || ""
+    ).toLowerCase();
+    const category = (
+        document.getElementById("ppCategoryFilter")?.value || ""
+    ).toLowerCase();
+
+    const products = cachedLibrary.filter((prod) => {
+        if (query) {
+            const matchesText =
+                (prod.title && prod.title.toLowerCase().includes(query)) ||
+                (prod.handle && prod.handle.toLowerCase().includes(query)) ||
+                (prod.sku && prod.sku.toLowerCase().includes(query)) ||
+                (prod.tags &&
+                    prod.tags.some((t) => t.toLowerCase().includes(query)));
+            if (!matchesText) return false;
+        }
+
+        if (category) {
+            const matchesCategory =
+                (prod.category && prod.category.toLowerCase() === category) ||
+                (prod.tags && prod.tags.includes(category));
+            if (!matchesCategory) return false;
+        }
+
+        return true;
+    });
+
+    const totalNoPlus = cachedLibrary.filter((p) => {
+        const l = getDisplayLayout(p);
+        return !l.plus || l.plus.length === 0;
+    }).length;
+
+    if (statusEl) {
+        statusEl.textContent = `Showing ${products.length} of ${cachedLibrary.length} products (${totalNoPlus} have no plus content).`;
+        statusEl.style.cssText = "color:#666; font-size:12px;";
+    }
+
+    if (products.length === 0) {
+        container.innerHTML =
+            '<div style="color:#008060; padding:20px; font-weight:600;">No matching products. Try clearing the search or category filter.</div>';
+        return;
+    }
+
+    container.innerHTML = "";
+
+    const shopUrl = localStorage.getItem("lastShop") || "";
+    const apiKey = localStorage.getItem("lastKey") || "";
+    const metafieldsStr = localStorage.getItem("lastMetafields") || "";
+    const hasCredentials = shopUrl && apiKey;
+
+    products.forEach((prod) => {
+        const layout = getDisplayLayout(prod);
+
+        // Collect all available images from main / banner / extra
+        const candidates = [];
+        const pushToGroup = (items, groupLabel) => {
+            (items || []).forEach((item) => {
+                const shopifyGid = item.shopifyId || item.shopifyFileId || "";
+                const displayUrl = item.src
+                    ? "file://" + item.src.replace(/\\/g, "/")
+                    : null;
+                // Need at least a display URL and a Shopify GID to push
+                if (!displayUrl || !shopifyGid) return;
+                candidates.push({
+                    id: shopifyGid,
+                    group: groupLabel,
+                    displayUrl,
+                });
+            });
+        };
+        pushToGroup(layout.main, "main");
+        pushToGroup(layout.banner, "banner");
+        pushToGroup(layout.extra, "extra");
+
+        if (candidates.length === 0) return; // No source images — skip
+
+        // Per-product selected order state
+        let selectedOrder = []; // array of candidate indices in chosen order
+
+        const card = document.createElement("div");
+        card.className = "pp-card";
+
+        // Header
+        const header = document.createElement("div");
+        header.className = "pp-card-header";
+        const titleWrap = document.createElement("div");
+        const existingPlusCount = layout.plus ? layout.plus.length : 0;
+        const existingLabel =
+            existingPlusCount > 0
+                ? `<span style="background:#e8f5e9;color:#2e7d32;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">${existingPlusCount} existing plus</span>`
+                : `<span style="background:#fff3e0;color:#e65100;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">no plus yet</span>`;
+        titleWrap.innerHTML = `<span class="pp-card-title">${prod.title || prod.handle}</span>${existingLabel}
+            <span class="pp-card-meta">${prod.handle} &mdash; ${candidates.length} source image(s)</span>`;
+
+        const rightWrap = document.createElement("div");
+        rightWrap.style.cssText = "display:flex; align-items:center; gap:8px;";
+
+        const resultSpan = document.createElement("span");
+        resultSpan.className = "pp-result";
+
+        const pushBtn = document.createElement("button");
+        pushBtn.className = "pp-push-btn";
+        pushBtn.textContent =
+            layout.plus && layout.plus.length > 0
+                ? "Append to Shopify"
+                : "Push to Shopify";
+        pushBtn.disabled = !hasCredentials;
+        if (!hasCredentials)
+            pushBtn.title = "Enter Shop URL and API key in the dashboard first";
+
+        rightWrap.appendChild(resultSpan);
+        rightWrap.appendChild(pushBtn);
+        header.appendChild(titleWrap);
+        header.appendChild(rightWrap);
+        card.appendChild(header);
+
+        // Source label
+        const srcLabel = document.createElement("div");
+        srcLabel.className = "pp-source-label";
+        srcLabel.textContent =
+            "Click images to select (in order). Drag to reorder. Selected images will be pushed as plus content.";
+        card.appendChild(srcLabel);
+
+        // Image strip
+        const strip = document.createElement("div");
+        strip.className = "pp-img-strip";
+
+        const refreshOrder = () => {
+            strip.querySelectorAll(".pp-thumb").forEach((thumb) => {
+                const idx = parseInt(thumb.dataset.idx);
+                const pos = selectedOrder.indexOf(idx);
+                const orderBadge = thumb.querySelector(".pp-thumb-order");
+                if (pos >= 0) {
+                    thumb.classList.add("selected");
+                    if (orderBadge) orderBadge.textContent = pos + 1;
+                } else {
+                    thumb.classList.remove("selected");
+                }
+            });
+            pushBtn.textContent =
+                selectedOrder.length > 0
+                    ? `${layout.plus && layout.plus.length > 0 ? "Append" : "Push"} ${selectedOrder.length} image(s) to Shopify`
+                    : layout.plus && layout.plus.length > 0
+                      ? "Append to Shopify"
+                      : "Push to Shopify";
+            pushBtn.disabled = !hasCredentials || selectedOrder.length === 0;
+        };
+
+        candidates.forEach((cand, idx) => {
+            const thumb = document.createElement("div");
+            thumb.className = "pp-thumb";
+            thumb.dataset.idx = idx;
+            thumb.draggable = true;
+
+            const img = document.createElement("img");
+            img.src = cand.displayUrl;
+            img.alt = cand.group;
+            img.loading = "lazy";
+
+            const badge = document.createElement("span");
+            badge.className = "pp-thumb-badge";
+            badge.textContent = cand.group;
+
+            const orderBadge = document.createElement("span");
+            orderBadge.className = "pp-thumb-order";
+
+            thumb.appendChild(img);
+            thumb.appendChild(badge);
+            thumb.appendChild(orderBadge);
+
+            // Click to toggle selection
+            thumb.addEventListener("click", () => {
+                const pos = selectedOrder.indexOf(idx);
+                if (pos >= 0) {
+                    selectedOrder.splice(pos, 1);
+                } else {
+                    selectedOrder.push(idx);
+                }
+                refreshOrder();
+            });
+
+            // Drag-to-reorder (only among selected)
+            let dragSrcIdx = null;
+            thumb.addEventListener("dragstart", (e) => {
+                if (!thumb.classList.contains("selected")) {
+                    e.preventDefault();
+                    return;
+                }
+                dragSrcIdx = idx;
+                thumb.classList.add("dragging");
+                e.dataTransfer.effectAllowed = "move";
+            });
+            thumb.addEventListener("dragend", () => {
+                thumb.classList.remove("dragging");
+                strip.classList.remove("drag-over");
+            });
+            thumb.addEventListener("dragover", (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                strip.classList.add("drag-over");
+            });
+            thumb.addEventListener("dragleave", () => {
+                strip.classList.remove("drag-over");
+            });
+            thumb.addEventListener("drop", (e) => {
+                e.preventDefault();
+                strip.classList.remove("drag-over");
+                if (dragSrcIdx === null || dragSrcIdx === idx) return;
+                const fromPos = selectedOrder.indexOf(dragSrcIdx);
+                const toPos = selectedOrder.indexOf(idx);
+                if (fromPos < 0 || toPos < 0) return; // one not selected
+                selectedOrder.splice(fromPos, 1);
+                selectedOrder.splice(toPos, 0, dragSrcIdx);
+                dragSrcIdx = null;
+                refreshOrder();
+            });
+
+            strip.appendChild(thumb);
+        });
+
+        card.appendChild(strip);
+
+        // Push handler
+        pushBtn.addEventListener("click", async () => {
+            if (selectedOrder.length === 0) return;
+            const mediaIds = selectedOrder
+                .map((i) => candidates[i].id)
+                .filter(Boolean);
+            if (mediaIds.length === 0) {
+                resultSpan.className = "pp-result err";
+                resultSpan.textContent =
+                    "No Shopify GIDs available for selected images.";
+                return;
+            }
+            pushBtn.disabled = true;
+            pushBtn.textContent = "Pushing...";
+            resultSpan.textContent = "";
+            try {
+                const result = await ipcRenderer.invoke("set-plus-metafield", {
+                    shopUrl,
+                    apiKey,
+                    metafields: metafieldsStr,
+                    handle: prod.handle,
+                    mediaIds,
+                    append: true,
+                });
+                resultSpan.className = "pp-result ok";
+                resultSpan.textContent = `✓ ${result.appended ? "Appended" : "Pushed"} ${result.count} image(s) (total: ${result.total})`;
+                pushBtn.textContent = "Done!";
+            } catch (err) {
+                console.error("[PushPlus] Failed:", err);
+                resultSpan.className = "pp-result err";
+                resultSpan.textContent = `✗ ${err.message}`;
+                pushBtn.disabled = false;
+                pushBtn.textContent = `Push ${selectedOrder.length} image(s) to Shopify`;
+            }
+        });
+
+        container.appendChild(card);
+    });
+
+    if (container.children.length === 0) {
+        container.innerHTML =
+            '<div style="color:#888; padding:20px;">No products with available source images found.</div>';
+    }
+}
+
+async function exportNumpadSelections() {
+    const rows = cachedLibrary.map((prod) => {
+        const sel = productNumpadSelections[prod.handle];
+        const nums =
+            sel && sel.size > 0
+                ? [...sel].sort((a, b) => a - b).join("|")
+                : null;
+        const layout = getDisplayLayout(prod);
+        const plusCount = layout.plus ? layout.plus.length : 0;
+        return {
+            handle: prod.handle,
+            title: prod.title || prod.productName || prod.handle || "",
+            numbers: nums,
+            plusCount,
+        };
+    });
+
+    const escCsv = (v) =>
+        v === null ? "null" : `"${String(v).replace(/"/g, '""')}"`;
+    const header = "Handle,Title,Plus Image Count,Selected Numbers";
+    const body = rows
+        .map((r) =>
+            [
+                escCsv(r.handle),
+                escCsv(r.title),
+                r.plusCount,
+                escCsv(r.numbers),
+            ].join(","),
+        )
+        .join("\n");
+    const csv = header + "\n" + body;
+
+    try {
+        const result = await ipcRenderer.invoke("export-numpad-selections", {
+            csv,
+            rowCount: rows.length,
+        });
+        if (result?.action === "saved") {
+            alert(`Exported ${result.rowCount} row(s) to:\n${result.filepath}`);
+        } else if (result?.action === "copied") {
+            alert(`${result.rowCount} row(s) copied to clipboard.`);
+        }
+    } catch (err) {
+        console.error("Export numpad failed:", err);
+        alert("Error exporting: " + (err.message || String(err)));
+    }
+}
+
+async function exportPlusContent() {
+    if (!selectedPath) {
+        return alert("Please select a source folder first.");
+    }
+
+    const btn = document.getElementById("exportPlusBtn");
+    const origText = btn ? btn.textContent : "Export Plus CSV";
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Exporting...";
+    }
+
+    try {
+        const result = await ipcRenderer.invoke("export-plus-content", {
+            folderPath: selectedPath,
+        });
+
+        if (!result || !result.success) {
+            if (result?.reason === "no-plus-content") {
+                alert(
+                    "No Plus (more_description) images found in the manifest.",
+                );
+            }
+            return;
+        }
+
+        if (result.action === "saved") {
+            alert(`Exported ${result.rowCount} row(s) to:\n${result.filepath}`);
+        } else if (result.action === "copied") {
+            alert(`${result.rowCount} row(s) copied to clipboard.`);
+        }
+    } catch (err) {
+        console.error("Export plus content failed:", err);
+        alert("Error exporting Plus content: " + (err.message || String(err)));
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = origText;
+        }
     }
 }
 
@@ -726,25 +1313,16 @@ async function exportCheckedLibraryImages() {
 
 // Initialize media type button states on page load
 function initMediaTypeButtons() {
-    const buttons = {
-        all: document.getElementById("mediaTypeAll"),
-        main: document.getElementById("mediaTypeMain"),
-        banner: document.getElementById("mediaTypeBanner"),
-        extra: document.getElementById("mediaTypeExtra"),
-        plus: document.getElementById("mediaTypePlus"),
-    };
+    const allActive = _allMediaTypes.every((t) => activeMediaTypes.has(t));
 
-    // Remove active class from all buttons
-    Object.values(buttons).forEach((btn) => {
-        if (btn) {
-            btn.classList.remove("active");
-        }
+    const allBtn = document.getElementById("mediaTypeAll");
+    if (allBtn) allBtn.classList.toggle("active", allActive);
+
+    _allMediaTypes.forEach((type) => {
+        const id = "mediaType" + type.charAt(0).toUpperCase() + type.slice(1);
+        const btn = document.getElementById(id);
+        if (btn) btn.classList.toggle("active", activeMediaTypes.has(type));
     });
-
-    // Add active class to the saved button state
-    if (buttons[activeMediaType]) {
-        buttons[activeMediaType].classList.add("active");
-    }
 
     syncExportTypeAllBehavior();
 }
@@ -830,7 +1408,12 @@ function buildOriginalLayout(prod) {
     sourceMedia.forEach((media) => {
         let group = media.group || "other";
         if (!groups[group]) group = "other";
-        groups[group].push(getMediaLayoutKey(media));
+        const key = getMediaLayoutKey(media);
+        // Within-group dedup: the same GID may appear in multiple groups but
+        // should never be listed twice inside the same group.
+        if (!groups[group].includes(key)) {
+            groups[group].push(key);
+        }
     });
 
     return normalizeLayout(groups);
@@ -845,30 +1428,56 @@ function getLayoutItemMap(prod) {
 }
 
 function getDisplayLayout(prod) {
-    const itemMap = getLayoutItemMap(prod);
+    // Build a group-aware lookup so the same GID can be found in its correct
+    // group (e.g. one gid:// can appear as main AND banner AND extra).
+    const groupMaps = {};
+    (prod.media || []).forEach((media) => {
+        const g = media.group || "other";
+        if (!groupMaps[g]) groupMaps[g] = new Map();
+        groupMaps[g].set(getMediaLayoutKey(media), media);
+    });
+    const itemMap = getLayoutItemMap(prod); // fallback global map
+
     const storedLayout = pendingReorders[prod.handle]?.layout;
     const layout = storedLayout || buildOriginalLayout(prod);
     const display = { main: [], banner: [], extra: [], plus: [], other: [] };
-    const used = new Set();
+
+    // Track placements as "key\x00group" composites so the same GID can
+    // legitimately occupy multiple groups while still being deduplicated
+    // within a single group.
+    const placed = new Set();
 
     ["main", "banner", "extra", "plus", "other"].forEach((group) => {
         (layout[group] || []).forEach((key) => {
-            const item = itemMap.get(key);
-            // Guard: a key that already appeared in an earlier group is not duplicated
-            if (item && !used.has(key)) {
-                display[group].push(item);
-                used.add(key);
+            const composite = `${key}\x00${group}`;
+            if (placed.has(composite)) return; // within-group dedup only
+            placed.add(composite);
+            // Prefer the item that was originally assigned to this group;
+            // fall back to any item with this key if no group-specific one exists.
+            const item =
+                (groupMaps[group] && groupMaps[group].get(key)) ||
+                itemMap.get(key);
+            if (item) {
+                // Clone with the correct group so rendering labels it properly.
+                display[group].push(
+                    item.group === group ? item : { ...item, group },
+                );
             }
         });
     });
 
+    // Append media items not yet placed in their designated group at all
+    // (orphaned/newly downloaded files not in any layout).
     (prod.media || []).forEach((media) => {
         const key = getMediaLayoutKey(media);
-        if (!used.has(key)) {
-            const group =
-                media.group && display[media.group] ? media.group : "other";
-            display[group].push(media);
-            used.add(key);
+        const g =
+            media.group && display[media.group] !== undefined
+                ? media.group
+                : "other";
+        const composite = `${key}\x00${g}`;
+        if (!placed.has(composite)) {
+            placed.add(composite);
+            display[g].push(media);
         }
     });
 
@@ -906,6 +1515,7 @@ function buildLayoutPayload(prod, layout) {
         main: (layout.main || []).map(toPayload).filter(Boolean),
         banner: (layout.banner || []).map(toPayload).filter(Boolean),
         extra: (layout.extra || []).map(toPayload).filter(Boolean),
+        plus: (layout.plus || []).map(toPayload).filter(Boolean),
     };
 }
 
@@ -916,11 +1526,22 @@ function applyPendingLayoutToCachedProduct(handle, layout) {
     const itemMap = getLayoutItemMap(product);
     const groupAssignments = {};
 
+    // Track keys that appear in multiple groups (cross-group clones into plus)
+    const keyCounts = {};
+    ["main", "banner", "extra", "plus", "other"].forEach((group) => {
+        (layout[group] || []).forEach((key) => {
+            keyCounts[key] = (keyCounts[key] || 0) + 1;
+        });
+    });
+
     ["main", "banner", "extra", "plus", "other"].forEach((group) => {
         (layout[group] || []).forEach((key, index) => {
+            // If a key appears in multiple groups, only assign it to the non-plus group
+            // (plus is additive — it doesn't move the item out of its original group)
+            if (keyCounts[key] > 1 && group === "plus") return;
             groupAssignments[key] = {
                 group,
-                position: group === "main" ? index + 1 : index + 1,
+                position: index + 1,
             };
         });
     });
@@ -1153,11 +1774,17 @@ function togglePendingRemoval(handle, folderPath, image, checked) {
 
     if (checked) {
         if (!entry.images.some((item) => imageKey(item) === key)) {
+            const syntheticId = String(
+                image.shopifyFileId || image.shopifyId || "",
+            );
             entry.images.push({
                 src: image.src,
                 filename: image.filename,
                 mediaId: image.shopifyId || "",
                 fileId: image.shopifyFileId || "",
+                syntheticId: syntheticId.startsWith("meta-json:")
+                    ? syntheticId
+                    : "",
                 group: image.group || "",
             });
         }
@@ -1508,18 +2135,23 @@ function renderGallery(products, containerId, showAll = false) {
         return;
     }
 
-    // In full library view, hide product rows that have no images for the selected media type.
+    // In full library view, hide product rows that have no images for the selected media types.
     let renderableProducts = products;
-    if (containerId === "fullLibraryArea" && activeMediaType !== "all") {
+    const _showingAllTypes = _allMediaTypes.every((t) =>
+        activeMediaTypes.has(t),
+    );
+    if (containerId === "fullLibraryArea" && !_showingAllTypes) {
         renderableProducts = products.filter((prod) => {
             const groups = getDisplayLayout(prod);
-            const items = groups[activeMediaType] || [];
-            return items.length > 0;
+            return [...activeMediaTypes].some(
+                (t) => (groups[t] || []).length > 0,
+            );
         });
     }
 
     if (renderableProducts.length === 0) {
-        container.innerHTML += `<div style="padding:20px; text-align:center; color:#666; background:white; border:1px solid #ddd;">No products contain ${activeMediaType} images.</div>`;
+        const _typeLabel = [...activeMediaTypes].join(", ");
+        container.innerHTML += `<div style="padding:20px; text-align:center; color:#666; background:white; border:1px solid #ddd;">No products contain ${_typeLabel} images.</div>`;
         updateReorderBar();
         updateRemovalBar();
         return;
@@ -1627,14 +2259,87 @@ function renderGallery(products, containerId, showAll = false) {
             headerActions.className = "product-header-actions";
             headerActions.appendChild(resetBtn);
             headerActions.appendChild(openFolderBtn);
+
+            // Push Plus toggle button
+            const pushPlusBtn = document.createElement("button");
+            pushPlusBtn.type = "button";
+            pushPlusBtn.className = "product-push-plus-btn";
+            const existingPlusCount = (() => {
+                const l = getDisplayLayout(prod);
+                return l.plus ? l.plus.length : 0;
+            })();
+            pushPlusBtn.textContent =
+                existingPlusCount > 0
+                    ? `📤 Plus (${existingPlusCount})`
+                    : "📤 Push Plus";
+            pushPlusBtn.title =
+                existingPlusCount > 0
+                    ? `Append to ${existingPlusCount} existing plus image(s)`
+                    : "Select images to push as plus content";
+            headerActions.appendChild(pushPlusBtn);
+
             header.appendChild(headerActions);
 
             row.appendChild(header);
 
+            // Numpad sidebar
+            const numpad = document.createElement("div");
+            numpad.className = "product-numpad";
+
+            const numpadLabel = document.createElement("div");
+            numpadLabel.className = "numpad-label";
+            numpadLabel.textContent = "Select #";
+            numpad.appendChild(numpadLabel);
+
+            const numpadGrid = document.createElement("div");
+            numpadGrid.className = "numpad-grid";
+
+            if (!productNumpadSelections[prod.handle]) {
+                productNumpadSelections[prod.handle] = new Set();
+            }
+            const sel = productNumpadSelections[prod.handle];
+
+            for (let n = 0; n <= 11; n++) {
+                const nb = document.createElement("button");
+                nb.type = "button";
+                nb.className = "numpad-btn" + (sel.has(n) ? " selected" : "");
+                nb.textContent = String(n);
+                nb.addEventListener("click", () => {
+                    if (sel.has(n)) {
+                        sel.delete(n);
+                        nb.classList.remove("selected");
+                    } else {
+                        sel.add(n);
+                        nb.classList.add("selected");
+                    }
+                    _saveNumpadSelections();
+                });
+                numpadGrid.appendChild(nb);
+            }
+            numpad.appendChild(numpadGrid);
+
+            const clearBtn = document.createElement("button");
+            clearBtn.type = "button";
+            clearBtn.className = "numpad-clear-btn";
+            clearBtn.textContent = "Clear";
+            clearBtn.addEventListener("click", () => {
+                sel.clear();
+                numpadGrid
+                    .querySelectorAll(".numpad-btn")
+                    .forEach((b) => b.classList.remove("selected"));
+                _saveNumpadSelections();
+            });
+            numpad.appendChild(clearBtn);
+
+            // Wrap content + numpad in a flex row
+            const cardBody = document.createElement("div");
+            cardBody.style.cssText =
+                "display:flex; align-items:flex-start; gap:0;";
+
             // Media Grid
             const grid = document.createElement("div");
             grid.style.cssText =
-                "display:flex; flex-direction:column; gap:15px;";
+                "display:flex; flex-direction:column; gap:15px; flex:1; min-width:0;";
             const mainWrapper = grid; // Alias for internal logic
 
             if (prod.media && prod.media.length > 0) {
@@ -1697,8 +2402,12 @@ function renderGallery(products, containerId, showAll = false) {
                     if (items.length === 0 && !isDraggable) return;
 
                     const sec = document.createElement("div");
+                    const hintText =
+                        groupName === "plus"
+                            ? "drag to reorder · drop from other sections to add (copy)"
+                            : "drag to reorder or move";
                     const hint = isDraggable
-                        ? ' <span style="font-size:10px;color:#aaa;font-weight:400;margin-left:4px;">drag to reorder or move</span>'
+                        ? ` <span style="font-size:10px;color:#aaa;font-weight:400;margin-left:4px;">${hintText}</span>`
                         : "";
                     sec.innerHTML = `<h5 style="margin:0 0 8px 0; color:#555; text-transform:uppercase; font-size:11px; letter-spacing:0.5px; border-bottom:1px solid #eee; padding-bottom:4px;">${title}${hint}</h5>`;
 
@@ -1765,6 +2474,66 @@ function renderGallery(products, containerId, showAll = false) {
                                 return;
                             }
 
+                            // Prevent any plus-section items from being dragged into other groups
+                            const srcGroupEl = _dnd.srcEl.parentElement;
+                            const srcGroup =
+                                srcGroupEl?.dataset?.dndGroup || "";
+                            if (srcGroup === "plus" && groupName !== "plus") {
+                                alert(
+                                    "Plus images cannot be moved to other groups directly. Use the Push Plus panel to manage them.",
+                                );
+                                return;
+                            }
+
+                            // When dragging from another group INTO plus, clone the card
+                            // so the original remains in its group (additive semantics)
+                            const isCrossGroupIntoPlusDrop =
+                                groupName === "plus" && srcGroup !== "plus";
+                            let cardToInsert = _dnd.srcEl;
+                            if (isCrossGroupIntoPlusDrop) {
+                                // Check for duplicate: don't allow the same layoutKey twice in plus
+                                const existingKeys = new Set(
+                                    [
+                                        ...rowDiv.querySelectorAll(".dnd-card"),
+                                    ].map((c) => c.dataset.layoutKey),
+                                );
+                                if (
+                                    existingKeys.has(
+                                        _dnd.srcEl.dataset.layoutKey,
+                                    )
+                                ) {
+                                    // Already in plus — nothing to do
+                                    return;
+                                }
+                                cardToInsert = _dnd.srcEl.cloneNode(true);
+                                // Re-attach drag events to the clone so it can be reordered within plus
+                                cardToInsert.addEventListener(
+                                    "dragstart",
+                                    (ev) => {
+                                        if (
+                                            deleteMode ||
+                                            Object.keys(pendingRemovals)
+                                                .length > 0
+                                        ) {
+                                            ev.preventDefault();
+                                            return;
+                                        }
+                                        _dnd.srcEl = cardToInsert;
+                                        _dnd.srcHandle = prod.handle;
+                                        ev.dataTransfer.effectAllowed = "move";
+                                        setTimeout(() => {
+                                            cardToInsert.style.opacity = "0.4";
+                                        }, 0);
+                                    },
+                                );
+                                cardToInsert.addEventListener("dragend", () => {
+                                    cardToInsert.style.opacity = "1";
+                                    _dnd.srcEl = null;
+                                    _dnd.srcHandle = null;
+                                    clearDropMarkers();
+                                });
+                            }
+
                             let dst =
                                 e.target.closest &&
                                 e.target.closest(".dnd-card");
@@ -1791,25 +2560,25 @@ function renderGallery(products, containerId, showAll = false) {
 
                             if (
                                 dst &&
-                                dst !== _dnd.srcEl &&
+                                dst !== cardToInsert &&
                                 rowDiv.contains(dst)
                             ) {
                                 const srcIdx = [...rowDiv.children].indexOf(
-                                    _dnd.srcEl,
+                                    cardToInsert,
                                 );
                                 const dstIdx = [...rowDiv.children].indexOf(
                                     dst,
                                 );
                                 if (srcIdx < dstIdx) {
                                     rowDiv.insertBefore(
-                                        _dnd.srcEl,
+                                        cardToInsert,
                                         dst.nextSibling,
                                     );
                                 } else {
-                                    rowDiv.insertBefore(_dnd.srcEl, dst);
+                                    rowDiv.insertBefore(cardToInsert, dst);
                                 }
                             } else {
-                                rowDiv.appendChild(_dnd.srcEl);
+                                rowDiv.appendChild(cardToInsert);
                             }
 
                             syncPendingLayout();
@@ -1831,8 +2600,7 @@ function renderGallery(products, containerId, showAll = false) {
                             isDraggable &&
                             canDnd &&
                             m.type === "image" &&
-                            !!remoteBindingId &&
-                            !isSyntheticPlusAsset;
+                            (!!remoteBindingId || isSyntheticPlusAsset);
                         if (canDragItem) {
                             card.draggable = true;
                             card.dataset.layoutKey = getMediaLayoutKey(m);
@@ -1863,8 +2631,8 @@ function renderGallery(products, containerId, showAll = false) {
 
                         const canRemove =
                             m.type === "image" &&
-                            !!remoteBindingId &&
-                            !isSyntheticPlusAsset;
+                            ((!isSyntheticPlusAsset && !!remoteBindingId) ||
+                                isSyntheticPlusAsset);
                         card.dataset.removable = canRemove ? "true" : "false";
                         const removalKey = (item) =>
                             `${item.group || ""}:${item.src || item.filename}`;
@@ -1969,22 +2737,19 @@ function renderGallery(products, containerId, showAll = false) {
                 );
 
                 // Order: Main, Banner, Extra, Plus, Other
-                // Filter based on activeMediaType
-                if (activeMediaType === "all") {
+                // Render only sections whose type is in the active multi-select set
+                const _showAll = _allMediaTypes.every((t) =>
+                    activeMediaTypes.has(t),
+                );
+                if (_showAll || activeMediaTypes.has("main"))
                     renderSection("main", "Main Images", groups.main, true);
+                if (_showAll || activeMediaTypes.has("banner"))
                     renderSection("banner", "Banners", groups.banner, true);
+                if (_showAll || activeMediaTypes.has("extra"))
                     renderSection("extra", "Extras", groups.extra, true);
-                    renderSection("plus", "Plus", groups.plus);
-                    renderSection("other", "Other", groups.other);
-                } else if (activeMediaType === "main") {
-                    renderSection("main", "Main Images", groups.main, true);
-                } else if (activeMediaType === "banner") {
-                    renderSection("banner", "Banners", groups.banner, true);
-                } else if (activeMediaType === "extra") {
-                    renderSection("extra", "Extras", groups.extra, true);
-                } else if (activeMediaType === "plus") {
-                    renderSection("plus", "Plus", groups.plus);
-                }
+                if (_showAll || activeMediaTypes.has("plus"))
+                    renderSection("plus", "Plus", groups.plus, true);
+                if (_showAll) renderSection("other", "Other", groups.other);
 
                 // grid is populated by renderSection (which appends to mainWrapper which is grid)
             } else {
@@ -1992,7 +2757,23 @@ function renderGallery(products, containerId, showAll = false) {
                     '<div style="color:#999; padding:10px;">No media files in this product folder.</div>';
             }
 
-            row.appendChild(grid);
+            cardBody.appendChild(grid);
+            cardBody.appendChild(numpad);
+            row.appendChild(cardBody);
+
+            // Inline Push Plus panel
+            const ppPanel = document.createElement("div");
+            ppPanel.className = "lib-pp-panel";
+
+            pushPlusBtn.addEventListener("click", () => {
+                const isOpen = ppPanel.classList.toggle("open");
+                pushPlusBtn.classList.toggle("active", isOpen);
+                if (isOpen && ppPanel.children.length === 0) {
+                    _buildLibPushPlusPanel(ppPanel, prod);
+                }
+            });
+
+            row.appendChild(ppPanel);
             container.appendChild(row);
         } catch (err) {
             console.error(`Error rendering product ${idx}:`, err);

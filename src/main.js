@@ -648,7 +648,279 @@ ipcMain.handle(
     },
 );
 
+// ============ PUSH PLUS HANDLER ============
+
+ipcMain.handle(
+    "set-plus-metafield",
+    async (
+        event,
+        {
+            shopUrl,
+            apiKey,
+            metafields: metafieldKeysString,
+            handle,
+            mediaIds,
+            append = true,
+        },
+    ) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!handle) throw new Error("Missing product handle");
+        if (!Array.isArray(mediaIds) || mediaIds.length === 0)
+            throw new Error("No media IDs provided");
+
+        // Locate the more_description metafield key from the configured keys string
+        const parseKeys = (str = "") =>
+            str
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .map((s) => {
+                    const dot = s.indexOf(".");
+                    return dot > -1
+                        ? { namespace: s.slice(0, dot), key: s.slice(dot + 1) }
+                        : { namespace: "custom", key: s };
+                });
+
+        const keys = parseKeys(metafieldKeysString);
+        const plusKey = keys.find(
+            ({ key }) =>
+                key.toLowerCase().endsWith("more_description") ||
+                key.toLowerCase().endsWith("moredescription"),
+        );
+        if (!plusKey) {
+            throw new Error(
+                "No more_description metafield key found in configured metafield keys. " +
+                    "Add a key ending in 'more_description' in the dashboard first.",
+            );
+        }
+
+        const client = new ShopifyClient(shopUrl, apiKey);
+
+        // Fetch live media to get CDN URLs for the given Shopify GIDs
+        const product = await client.getProductMediaContext(
+            handle,
+            metafieldKeysString,
+        );
+        if (!product) throw new Error(`Product not found: ${handle}`);
+
+        // Build GID → CDN URL map from main media
+        const gidToUrl = new Map();
+        (product.media?.edges || []).forEach((edge) => {
+            const node = edge?.node;
+            if (!node || node.mediaContentType !== "IMAGE") return;
+            const url = node.image?.originalSrc;
+            if (url) gidToUrl.set(node.id, url);
+        });
+
+        // Also index metafield references (banner / extra)
+        const parsedKeys = parseKeys(metafieldKeysString);
+        parsedKeys.forEach(({ namespace, key }, index) => {
+            const mf = product[`mf_${index}`];
+            if (!mf) return;
+            if (mf.reference?.image?.originalSrc) {
+                gidToUrl.set(mf.reference.id, mf.reference.image.originalSrc);
+            }
+            (mf.references?.edges || []).forEach((e) => {
+                const n = e?.node;
+                if (n?.image?.originalSrc)
+                    gidToUrl.set(n.id, n.image.originalSrc);
+            });
+        });
+
+        // Resolve CDN URLs in the requested order
+        const newUrls = mediaIds
+            .map((gid) => gidToUrl.get(gid))
+            .filter(Boolean);
+        if (newUrls.length === 0) {
+            throw new Error(
+                "Could not resolve any CDN URLs for the selected images. " +
+                    "Make sure the images are still attached to the product in Shopify.",
+            );
+        }
+
+        // Read existing plus value and append (deduplicated by URL)
+        let existingItems = [];
+        const plusMfIndex = parsedKeys.findIndex(
+            ({ key }) =>
+                key.toLowerCase().endsWith("more_description") ||
+                key.toLowerCase().endsWith("moredescription"),
+        );
+        if (append && plusMfIndex >= 0) {
+            const existingMf = product[`mf_${plusMfIndex}`];
+            if (existingMf?.value) {
+                try {
+                    const parsed = JSON.parse(existingMf.value);
+                    if (Array.isArray(parsed)) {
+                        existingItems = parsed.filter(
+                            (item) =>
+                                item && (item.url || typeof item === "string"),
+                        );
+                    }
+                } catch {
+                    // existing value not valid JSON — start fresh
+                }
+            }
+        }
+
+        // Build merged list: existing first, then new (skip duplicates by URL)
+        const existingUrls = new Set(
+            existingItems.map((item) =>
+                typeof item === "string" ? item : item.url,
+            ),
+        );
+        const addedUrls = newUrls.filter((url) => !existingUrls.has(url));
+        const mergedItems = [
+            ...existingItems,
+            ...addedUrls.map((url) => ({ url, alt: "" })),
+        ];
+
+        // Build JSON value: array of { url, alt } objects
+        const value = JSON.stringify(mergedItems);
+        const appended = existingItems.length > 0 && addedUrls.length > 0;
+
+        await client._setMetafields([
+            {
+                ownerId: product.id,
+                namespace: plusKey.namespace,
+                key: plusKey.key,
+                type: "multi_line_text_field",
+                value,
+            },
+        ]);
+
+        return {
+            success: true,
+            handle,
+            count: addedUrls.length,
+            total: mergedItems.length,
+            appended,
+        };
+    },
+);
+
 // ============ EXPORT HANDLERS ============
+
+ipcMain.handle("export-numpad-selections", async (event, { csv, rowCount }) => {
+    if (!csv) throw new Error("No CSV data provided");
+
+    const choice = await dialog.showMessageBox(mainWindow, {
+        type: "question",
+        buttons: ["Save CSV File", "Copy for Excel/Google Sheets", "Cancel"],
+        defaultId: 0,
+        cancelId: 2,
+        title: "Export Numpad Selections",
+        message: `${rowCount} product row(s) ready.`,
+        detail: "Save as a CSV file, or copy tab-separated data to clipboard.",
+    });
+
+    restoreMainWindowFocus();
+
+    if (choice.response === 2) return { success: false, reason: "cancelled" };
+
+    if (choice.response === 1) {
+        clipboard.writeText(csvToTsv(csv));
+        return { success: true, action: "copied", rowCount };
+    }
+
+    const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: `numpad-selections-${new Date().toISOString().split("T")[0]}.csv`,
+        filters: [{ name: "CSV Files", extensions: ["csv"] }],
+    });
+
+    restoreMainWindowFocus();
+    if (!filePath) return { success: false, reason: "cancelled" };
+
+    fs.writeFileSync(filePath, csv, "utf-8");
+    return { success: true, action: "saved", filepath: filePath, rowCount };
+});
+
+ipcMain.handle("export-plus-content", async (event, { folderPath }) => {
+    if (!folderPath) throw new Error("No folder path provided");
+
+    const manifest = new ManifestManager(folderPath);
+    await manifest.load();
+    const products = manifest.getAllProducts();
+
+    // Build one row per plus image per product
+    const rows = [];
+    for (const [handle, prod] of Object.entries(products)) {
+        const plusItems = (prod.media || []).filter((m) => m.group === "plus");
+        for (const item of plusItems) {
+            // URL is embedded in the synthetic id after the https:// marker
+            const urlStart = String(item.id || "").indexOf("https://");
+            const imageUrl = urlStart >= 0 ? item.id.slice(urlStart) : "";
+            if (!imageUrl) continue;
+            rows.push({
+                handle,
+                title: prod.title || handle,
+                sku: prod.sku || "",
+                imageUrl,
+            });
+        }
+    }
+
+    if (rows.length === 0) {
+        return { success: false, reason: "no-plus-content" };
+    }
+
+    // Build CSV text
+    const escCsv = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const header = ["Handle", "Title", "SKU", "Image URL"].join(",");
+    const body = rows
+        .map((r) =>
+            [
+                escCsv(r.handle),
+                escCsv(r.title),
+                escCsv(r.sku),
+                escCsv(r.imageUrl),
+            ].join(","),
+        )
+        .join("\n");
+    const csv = header + "\n" + body;
+
+    const choice = await dialog.showMessageBox(mainWindow, {
+        type: "question",
+        buttons: ["Save CSV File", "Copy for Excel/Google Sheets", "Cancel"],
+        defaultId: 0,
+        cancelId: 2,
+        title: "Export Plus Content",
+        message: `${rows.length} plus image row(s) ready.`,
+        detail: "Save as a CSV file, or copy tab-separated data to clipboard for direct paste.",
+    });
+
+    restoreMainWindowFocus();
+
+    if (choice.response === 2) {
+        return { success: false, reason: "cancelled" };
+    }
+
+    if (choice.response === 1) {
+        // Convert to TSV for clipboard
+        const tsv = csvToTsv(csv);
+        clipboard.writeText(tsv);
+        return { success: true, action: "copied", rowCount: rows.length };
+    }
+
+    const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: `plus-content-${new Date().toISOString().split("T")[0]}.csv`,
+        filters: [{ name: "CSV Files", extensions: ["csv"] }],
+    });
+
+    restoreMainWindowFocus();
+
+    if (!filePath) {
+        return { success: false, reason: "cancelled" };
+    }
+
+    fs.writeFileSync(filePath, csv, "utf-8");
+    return {
+        success: true,
+        action: "saved",
+        filepath: filePath,
+        rowCount: rows.length,
+    };
+});
 
 ipcMain.handle(
     "test-export-products",
