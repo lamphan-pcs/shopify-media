@@ -1104,7 +1104,7 @@ function csvToTsv(csvText) {
 }
 
 function generateProductsCSV(products) {
-    // CSV Headers matching Shopify export format
+    // CSV Headers matching requested Shopify export field order
     const headers = [
         "Handle",
         "Title",
@@ -1168,7 +1168,9 @@ function generateProductsCSV(products) {
         "Key Ingredients & Benefits (product.metafields.custom.key_ingredients_benefits)",
         "Key Message (product.metafields.custom.key_message)",
         "Materials (product.metafields.custom.materials)",
+        "More Description (product.metafields.custom.more_description)",
         "Overview (product.metafields.custom.overview)",
+        "Product Attachments (product.metafields.custom.product_attachments)",
         "question_answers (product.metafields.custom.question_answers)",
         "Short Title (product.metafields.custom.short_title)",
         "Suitable For Skin Type (product.metafields.custom.suitable_for_skin_type)",
@@ -1179,11 +1181,14 @@ function generateProductsCSV(products) {
         "Fragrance (product.metafields.shopify.fragrance)",
         "Moisturizer type (product.metafields.shopify.moisturizer-type)",
         "Product form (product.metafields.shopify.product-form)",
+        "Suitable for skin type (product.metafields.shopify.suitable-for-skin-type)",
+        "Target gender (product.metafields.shopify.target-gender)",
         "Variant Image",
         "Variant Weight Unit",
         "Variant Tax Code",
         "Cost per item",
         "Status",
+        "Variant ID",
     ];
 
     // Helper to escape CSV values
@@ -1242,89 +1247,135 @@ function generateProductsCSV(products) {
                 imageForVariant ||
                 (variantIdx < images.length ? images[variantIdx] : null);
 
-            const row = [
-                product.handle, // Handle
-                product.title, // Title
-                escapeCSV(product.bodyHtml), // Body (HTML)
-                product.vendor, // Vendor
-                product.category?.name || "", // Product Category
-                product.productType || "", // Type
-                Array.isArray(product.tags) ? product.tags.join(",") : "", // Tags
-                product.publishedAt ? "true" : "false", // Published
-                options[0]?.name || "", // Option1 Name
-                options[0]?.values?.[variantIdx] || "", // Option1 Value
-                "", // Option1 Linked To
-                options[1]?.name || "", // Option2 Name
-                options[1]?.values?.[variantIdx] || "", // Option2 Value
-                "", // Option2 Linked To
-                options[2]?.name || "", // Option3 Name
-                options[2]?.values?.[variantIdx] || "", // Option3 Value
-                "", // Option3 Linked To
-                variant.sku || "", // Variant SKU
-                "", // Variant Grams (not available from GraphQL)
-                inventoryItem.tracked ? "shopify" : "", // Variant Inventory Tracker
-                variant.inventoryQuantity || 0, // Variant Inventory Qty
-                inventoryItem.tracked ? "deny" : "", // Variant Inventory Policy
-                "", // Variant Fulfillment Service (not available in GraphQL)
-                variant.price || "", // Variant Price
-                variant.compareAtPrice || "", // Variant Compare At Price
-                inventoryItem.requiresShipping ? "true" : "false", // Variant Requires Shipping
-                variant.taxable ? "true" : "false", // Variant Taxable
-                "", // Unit Price Total Measure
-                "", // Unit Price Total Measure Unit
-                "", // Unit Price Base Measure
-                "", // Unit Price Base Measure Unit
-                variant.barcode || "", // Variant Barcode
-                imageToUse?.node?.url || "", // Image Src
-                imageToUse ? variantIdx + 1 : "", // Image Position (use variant index)
-                imageToUse?.node?.altText || "", // Image Alt Text
-                "", // Gift Card
-                getMetafieldValue(product, "seoTitle.value") || "", // SEO Title
-                getMetafieldValue(product, "seoDescription.value") || "", // SEO Description
-                "", // Google Shopping / Google Product Category
-                "", // Google Shopping / Gender
-                "", // Google Shopping / Age Group
-                "", // Google Shopping / MPN
-                "", // Google Shopping / Condition
-                "", // Google Shopping / Custom Product
-                "", // Google Shopping / Custom Label 0
-                "", // Google Shopping / Custom Label 1
-                "", // Google Shopping / Custom Label 2
-                "", // Google Shopping / Custom Label 3
-                "", // Google Shopping / Custom Label 4
-                getMetafieldValue(product, "mf_0.value") || "", // Also Like
-                getMetafieldValue(product, "mf_1.value") || "", // Benefits
-                getMetafieldValue(product, "mf_2.value") || "", // Cautions
-                getMetafieldValue(product, "mf_3.value") || "", // Collection Name
-                getMetafieldValue(product, "mf_4.value") || "", // Custom Questions
-                getMetafieldValue(product, "mf_5.value") || "", // Disclaimer
-                getMetafieldValue(product, "mf_6.value") || "", // How to use
-                getMetafieldValue(product, "mf_7.value") || "", // Ingredients
-                getMetafieldValue(product, "mf_8.value") || "", // Keywords
-                getMetafieldValue(product, "mf_9.value") || "", // Key Features
-                getMetafieldValue(product, "mf_10.value") || "", // Key Ingredients & Benefits
-                getMetafieldValue(product, "mf_11.value") || "", // Key Message
-                getMetafieldValue(product, "mf_12.value") || "", // Materials
-                getMetafieldValue(product, "mf_13.value") || "", // Overview
-                getMetafieldValue(product, "mf_14.value") || "", // Question Answers
-                getMetafieldValue(product, "mf_15.value") || "", // Short Title
-                getMetafieldValue(product, "mf_16.value") || "", // Suitable For Skin Type
-                getMetafieldValue(product, "mf_17.value") || "", // User Review
-                getMetafieldValue(product, "mf_18.value") || "", // Use It With
-                getMetafieldValue(product, "mf_19.value") || "", // Youtube Video Links
-                getMetafieldValue(product, "metafieldGoogleProduct.value") ||
-                    "", // Google: Custom Product
-                getMetafieldValue(product, "metafieldFragrance.value") || "", // Fragrance
-                getMetafieldValue(product, "metafieldMoisturizerType.value") ||
-                    "", // Moisturizer type
-                getMetafieldValue(product, "metafieldProductForm.value") || "", // Product form
-                variant.image?.url || "", // Variant Image
-                "", // Variant Weight Unit (not available from GraphQL)
-                variant.taxCode || "", // Variant Tax Code
-                "", // Cost per item - Not available from GraphQL
-                product.status, // Status
-            ];
+            const rowByHeader = {
+                Handle: product.handle || "",
+                Title: product.title || "",
+                "Body (HTML)": product.bodyHtml || "",
+                Vendor: product.vendor || "",
+                "Product Category": product.category?.name || "",
+                Type: product.productType || "",
+                Tags: Array.isArray(product.tags) ? product.tags.join(",") : "",
+                Published: product.publishedAt ? "true" : "false",
+                "Option1 Name": options[0]?.name || "",
+                "Option1 Value": options[0]?.values?.[variantIdx] || "",
+                "Option1 Linked To": "",
+                "Option2 Name": options[1]?.name || "",
+                "Option2 Value": options[1]?.values?.[variantIdx] || "",
+                "Option2 Linked To": "",
+                "Option3 Name": options[2]?.name || "",
+                "Option3 Value": options[2]?.values?.[variantIdx] || "",
+                "Option3 Linked To": "",
+                "Variant SKU": variant.sku || "",
+                "Variant Grams": "",
+                "Variant Inventory Tracker": inventoryItem.tracked ? "shopify" : "",
+                "Variant Inventory Qty": variant.inventoryQuantity || 0,
+                "Variant Inventory Policy": inventoryItem.tracked ? "deny" : "",
+                "Variant Fulfillment Service": "",
+                "Variant Price": variant.price || "",
+                "Variant Compare At Price": variant.compareAtPrice || "",
+                "Variant Requires Shipping": inventoryItem.requiresShipping
+                    ? "true"
+                    : "false",
+                "Variant Taxable": variant.taxable ? "true" : "false",
+                "Unit Price Total Measure": "",
+                "Unit Price Total Measure Unit": "",
+                "Unit Price Base Measure": "",
+                "Unit Price Base Measure Unit": "",
+                "Variant Barcode": variant.barcode || "",
+                "Image Src": imageToUse?.node?.url || "",
+                "Image Position": imageToUse ? variantIdx + 1 : "",
+                "Image Alt Text": imageToUse?.node?.altText || "",
+                "Gift Card": "",
+                "SEO Title": getMetafieldValue(product, "seoTitle.value") || "",
+                "SEO Description":
+                    getMetafieldValue(product, "seoDescription.value") || "",
+                "Google Shopping / Google Product Category": "",
+                "Google Shopping / Gender": "",
+                "Google Shopping / Age Group": "",
+                "Google Shopping / MPN": "",
+                "Google Shopping / Condition": "",
+                "Google Shopping / Custom Product": "",
+                "Google Shopping / Custom Label 0": "",
+                "Google Shopping / Custom Label 1": "",
+                "Google Shopping / Custom Label 2": "",
+                "Google Shopping / Custom Label 3": "",
+                "Google Shopping / Custom Label 4": "",
+                "Also Like (product.metafields.custom.also_like)":
+                    getMetafieldValue(product, "mf_0.value") || "",
+                "Benefits (product.metafields.custom.benefits)":
+                    getMetafieldValue(product, "mf_1.value") || "",
+                "Cautions (product.metafields.custom.cautions)":
+                    getMetafieldValue(product, "mf_2.value") || "",
+                "Collection Name (product.metafields.custom.collection_name)":
+                    getMetafieldValue(product, "mf_3.value") || "",
+                "Custom Questions (product.metafields.custom.custom_questions)":
+                    getMetafieldValue(product, "mf_4.value") || "",
+                "Disclaimer (product.metafields.custom.disclaimer)":
+                    getMetafieldValue(product, "mf_5.value") || "",
+                "How to use (product.metafields.custom.how_to_use)":
+                    getMetafieldValue(product, "mf_6.value") || "",
+                "Ingredients (product.metafields.custom.ingredients)":
+                    getMetafieldValue(product, "mf_7.value") || "",
+                "Keywords (product.metafields.custom.keywords)":
+                    getMetafieldValue(product, "mf_8.value") || "",
+                "Key Features (product.metafields.custom.key_features)":
+                    getMetafieldValue(product, "mf_9.value") || "",
+                "Key Ingredients & Benefits (product.metafields.custom.key_ingredients_benefits)":
+                    getMetafieldValue(product, "mf_10.value") || "",
+                "Key Message (product.metafields.custom.key_message)":
+                    getMetafieldValue(product, "mf_11.value") || "",
+                "Materials (product.metafields.custom.materials)":
+                    getMetafieldValue(product, "mf_12.value") || "",
+                "More Description (product.metafields.custom.more_description)":
+                    getMetafieldValue(product, "mf_13.value") || "",
+                "Overview (product.metafields.custom.overview)":
+                    getMetafieldValue(product, "mf_14.value") || "",
+                "Product Attachments (product.metafields.custom.product_attachments)":
+                    getMetafieldValue(product, "mf_15.value") || "",
+                "question_answers (product.metafields.custom.question_answers)":
+                    getMetafieldValue(product, "mf_16.value") || "",
+                "Short Title (product.metafields.custom.short_title)":
+                    getMetafieldValue(product, "mf_17.value") || "",
+                "Suitable For Skin Type (product.metafields.custom.suitable_for_skin_type)":
+                    getMetafieldValue(product, "mf_18.value") || "",
+                "User Review (product.metafields.custom.user_review)":
+                    getMetafieldValue(product, "mf_19.value") || "",
+                "Use It With (product.metafields.custom.use_it_with)":
+                    getMetafieldValue(product, "mf_20.value") || "",
+                "Youtube Video Links (product.metafields.custom.youtube_video_links)":
+                    getMetafieldValue(product, "mf_21.value") || "",
+                "Google: Custom Product (product.metafields.mm-google-shopping.custom_product)":
+                    getMetafieldValue(product, "metafieldGoogleProduct.value") ||
+                    "",
+                "Fragrance (product.metafields.shopify.fragrance)":
+                    getMetafieldValue(product, "metafieldFragrance.value") || "",
+                "Moisturizer type (product.metafields.shopify.moisturizer-type)":
+                    getMetafieldValue(
+                        product,
+                        "metafieldMoisturizerType.value",
+                    ) || "",
+                "Product form (product.metafields.shopify.product-form)":
+                    getMetafieldValue(product, "metafieldProductForm.value") ||
+                    "",
+                "Suitable for skin type (product.metafields.shopify.suitable-for-skin-type)":
+                    getMetafieldValue(
+                        product,
+                        "metafieldSuitableForSkinType.value",
+                    ) || "",
+                "Target gender (product.metafields.shopify.target-gender)":
+                    getMetafieldValue(product, "metafieldTargetGender.value") ||
+                    "",
+                "Variant Image": variant.image?.url || "",
+                "Variant Weight Unit": "",
+                "Variant Tax Code": variant.taxCode || "",
+                "Cost per item": "",
+                Status: product.status || "",
+                "Variant ID":
+                    variant.legacyResourceId ||
+                    (variant.id ? variant.id.split("/").pop() : ""),
+            };
 
+            const row = headers.map((header) => rowByHeader[header] || "");
             rows.push(row.map(escapeCSV).join(","));
         });
     });

@@ -1059,7 +1059,7 @@ class ShopifyClient {
             `[Shopify] Fetching products for export. Cursor: ${cursor}, Limit: ${limit}`,
         );
 
-        // Hardcoded custom metafields (matching CSV column order mf_0..mf_19)
+        // Hardcoded custom metafields (matching CSV column order mf_0..mf_22)
         const metafieldQuery = `
                 mf_0: metafield(namespace: "custom", key: "also_like") { value type }
                 mf_1: metafield(namespace: "custom", key: "benefits") { value type }
@@ -1074,17 +1074,21 @@ class ShopifyClient {
                 mf_10: metafield(namespace: "custom", key: "key_ingredients_benefits") { value type }
                 mf_11: metafield(namespace: "custom", key: "key_message") { value type }
                 mf_12: metafield(namespace: "custom", key: "materials") { value type }
-                mf_13: metafield(namespace: "custom", key: "overview") { value type }
-                mf_14: metafield(namespace: "custom", key: "question_answers") { value type }
-                mf_15: metafield(namespace: "custom", key: "short_title") { value type }
-                mf_16: metafield(namespace: "custom", key: "suitable_for_skin_type") { value type }
-                mf_17: metafield(namespace: "custom", key: "user_review") { value type }
-                mf_18: metafield(namespace: "custom", key: "use_it_with") { value type }
-                mf_19: metafield(namespace: "custom", key: "youtube_video_links") { value type }
+                mf_13: metafield(namespace: "custom", key: "more_description") { value type }
+                mf_14: metafield(namespace: "custom", key: "overview") { value type }
+                mf_15: metafield(namespace: "custom", key: "product_attachments") { value type }
+                mf_16: metafield(namespace: "custom", key: "question_answers") { value type }
+                mf_17: metafield(namespace: "custom", key: "short_title") { value type }
+                mf_18: metafield(namespace: "custom", key: "suitable_for_skin_type") { value type }
+                mf_19: metafield(namespace: "custom", key: "user_review") { value type }
+                mf_20: metafield(namespace: "custom", key: "use_it_with") { value type }
+                mf_21: metafield(namespace: "custom", key: "youtube_video_links") { value type }
                 metafieldGoogleProduct: metafield(namespace: "mm-google-shopping", key: "custom_product") { value type }
                 metafieldFragrance: metafield(namespace: "shopify", key: "fragrance") { value }
                 metafieldMoisturizerType: metafield(namespace: "shopify", key: "moisturizer-type") { value }
                 metafieldProductForm: metafield(namespace: "shopify", key: "product-form") { value }
+                metafieldSuitableForSkinType: metafield(namespace: "shopify", key: "suitable-for-skin-type") { value }
+                metafieldTargetGender: metafield(namespace: "shopify", key: "target-gender") { value }
         `;
 
         const query = `
