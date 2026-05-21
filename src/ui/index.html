@@ -220,6 +220,15 @@
             #floatPushBtn:disabled {
                 background: #ccc;
             }
+            #floatRenamePlusBtn {
+                background: #6a1b9a;
+                color: #fff;
+            }
+            #floatPatchPlusBtn {
+                background: #bf360c;
+                color: #fff;
+                font-size: 0.85em;
+            }
 
             .tab-content {
                 display: none;
@@ -406,6 +415,16 @@
 
             .library-action-btn:active {
                 transform: scale(0.98);
+            }
+
+            .library-action-btn.active {
+                background: #008060;
+                color: white;
+                border-color: #008060;
+            }
+            .library-action-btn.active:hover {
+                background: #006b4d;
+                border-color: #006b4d;
             }
 
             /* Filter controls */
@@ -1612,6 +1631,25 @@
                             </label>
                         </div>
 
+                        <label
+                            style="
+                                display: inline-flex;
+                                align-items: center;
+                                gap: 6px;
+                                font-size: 13px;
+                                color: #555;
+                                white-space: nowrap;
+                                cursor: pointer;
+                            "
+                        >
+                            <input
+                                type="checkbox"
+                                id="excludeTiktok"
+                                onchange="filterLibrary()"
+                            />
+                            Exclude TikTok
+                        </label>
+
                         <select
                             id="categoryFilter"
                             onchange="filterLibrary()"
@@ -1657,6 +1695,72 @@
                             placeholder="Search products..."
                             class="library-search-input"
                         />
+                        <button
+                            id="multiSearchToggle"
+                            onclick="toggleMultiSearch()"
+                            class="library-action-btn"
+                            title="Paste a list of SKUs / handles to search multiple at once"
+                            style="white-space: nowrap"
+                        >
+                            ☰ List Search
+                        </button>
+                    </div>
+                    <!-- Multi-Search Panel -->
+                    <div
+                        id="multiSearchPanel"
+                        style="display: none; margin-top: 10px"
+                    >
+                        <div
+                            style="
+                                display: flex;
+                                gap: 8px;
+                                align-items: flex-start;
+                            "
+                        >
+                            <textarea
+                                id="libMultiSearch"
+                                placeholder="Paste one SKU or handle per line, e.g.&#10;RVC-CTB001&#10;RVC-CTB002&#10;RVC-HA029"
+                                oninput="filterLibrary()"
+                                onkeydown="event.stopPropagation()"
+                                style="
+                                    flex: 1;
+                                    min-height: 110px;
+                                    padding: 8px 10px;
+                                    border: 2px solid #008060;
+                                    border-radius: 6px;
+                                    font-size: 13px;
+                                    font-family: monospace;
+                                    resize: vertical;
+                                    line-height: 1.5;
+                                "
+                            ></textarea>
+                            <button
+                                onclick="
+                                    document.getElementById(
+                                        'libMultiSearch',
+                                    ).value = '';
+                                    filterLibrary();
+                                "
+                                class="library-action-btn"
+                                title="Clear list"
+                                style="padding: 6px 10px; font-size: 12px"
+                            >
+                                ✕ Clear
+                            </button>
+                        </div>
+                        <div
+                            id="multiSearchNotFound"
+                            style="
+                                display: none;
+                                margin-top: 8px;
+                                padding: 8px 12px;
+                                background: #fff3cd;
+                                border: 1px solid #ffc107;
+                                border-radius: 6px;
+                                font-size: 13px;
+                                color: #856404;
+                            "
+                        ></div>
                     </div>
                 </div>
                 <!-- Pending Reorder Bar -->
@@ -2713,6 +2817,20 @@
             >
                 ↑ Push to Shopify
             </button>
+            <button
+                id="floatRenamePlusBtn"
+                class="float-btn"
+                onclick="showPlusRenameModal()"
+            >
+                ✏ Rename Plus
+            </button>
+            <button
+                id="floatPatchPlusBtn"
+                class="float-btn"
+                onclick="patchPlusMetafields()"
+            >
+                🔧 Patch Plus URLs
+            </button>
         </div>
         <button
             id="floatingLibraryToggle"
@@ -2720,6 +2838,287 @@
         >
             ◀ Tools
         </button>
+
+        <!-- Patch Plus Log Modal -->
+        <div
+            id="patchPlusLogModal"
+            style="
+                display: none;
+                position: fixed;
+                z-index: 2100;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.55);
+                align-items: center;
+                justify-content: center;
+            "
+        >
+            <div
+                style="
+                    background: #fff;
+                    border-radius: 8px;
+                    padding: 24px;
+                    width: 660px;
+                    max-width: 95vw;
+                    max-height: 85vh;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                "
+            >
+                <div style="font-weight: 700; font-size: 1.1em">
+                    Patch Plus URLs — Log
+                </div>
+                <div
+                    id="patchPlusLogSummary"
+                    style="font-size: 0.95em; color: #444"
+                ></div>
+                <textarea
+                    id="patchPlusLogText"
+                    readonly
+                    style="
+                        flex: 1;
+                        min-height: 300px;
+                        font-family: monospace;
+                        font-size: 0.82em;
+                        border: 1px solid #ddd;
+                        border-radius: 4px;
+                        padding: 10px;
+                        resize: vertical;
+                        white-space: pre;
+                    "
+                ></textarea>
+                <div
+                    style="display: flex; gap: 10px; justify-content: flex-end"
+                >
+                    <button
+                        onclick="
+                            navigator.clipboard.writeText(
+                                document.getElementById('patchPlusLogText')
+                                    .value,
+                            )
+                        "
+                        style="
+                            padding: 7px 18px;
+                            border: 1px solid #ccc;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            background: #f5f5f5;
+                        "
+                    >
+                        Copy Log
+                    </button>
+                    <button
+                        onclick="
+                            document.getElementById(
+                                'patchPlusLogModal',
+                            ).style.display = 'none'
+                        "
+                        style="
+                            padding: 7px 18px;
+                            border: none;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            background: #333;
+                            color: #fff;
+                        "
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bulk Rename Plus Images Modal -->
+        <div
+            id="plusRenameModal"
+            style="
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.55);
+                z-index: 2000;
+                align-items: center;
+                justify-content: center;
+            "
+        >
+            <div
+                style="
+                    background: white;
+                    border-radius: 12px;
+                    padding: 24px;
+                    width: 860px;
+                    max-width: 92vw;
+                    max-height: 85vh;
+                    display: flex;
+                    flex-direction: column;
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+                "
+            >
+                <h3 style="margin: 0 0 6px 0; font-size: 1.1em">
+                    Bulk Rename Plus Images
+                </h3>
+                <p
+                    id="plusRenameSubtitle"
+                    style="font-size: 0.85em; color: #555; margin: 0 0 12px 0"
+                ></p>
+                <div
+                    id="plusRenameWarning"
+                    style="
+                        display: none;
+                        background: #fff3e0;
+                        border: 1px solid #ffb74d;
+                        border-radius: 6px;
+                        padding: 8px 12px;
+                        font-size: 0.82em;
+                        color: #e65100;
+                        margin-bottom: 10px;
+                    "
+                ></div>
+                <div
+                    style="
+                        overflow-y: auto;
+                        flex: 1;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 6px;
+                    "
+                >
+                    <table
+                        id="plusRenameTable"
+                        style="
+                            width: 100%;
+                            border-collapse: collapse;
+                            font-size: 0.8em;
+                        "
+                    >
+                        <thead>
+                            <tr
+                                style="
+                                    background: #f5f5f5;
+                                    position: sticky;
+                                    top: 0;
+                                "
+                            >
+                                <th
+                                    style="
+                                        padding: 7px 10px;
+                                        text-align: left;
+                                        border-bottom: 1px solid #ddd;
+                                        white-space: nowrap;
+                                    "
+                                >
+                                    Product
+                                </th>
+                                <th
+                                    style="
+                                        padding: 7px 10px;
+                                        text-align: center;
+                                        border-bottom: 1px solid #ddd;
+                                        white-space: nowrap;
+                                    "
+                                >
+                                    #
+                                </th>
+                                <th
+                                    style="
+                                        padding: 7px 10px;
+                                        text-align: left;
+                                        border-bottom: 1px solid #ddd;
+                                    "
+                                >
+                                    Current Filename
+                                </th>
+                                <th
+                                    style="
+                                        padding: 7px 10px;
+                                        text-align: left;
+                                        border-bottom: 1px solid #ddd;
+                                    "
+                                >
+                                    New Filename
+                                </th>
+                                <th
+                                    style="
+                                        padding: 7px 10px;
+                                        text-align: left;
+                                        border-bottom: 1px solid #ddd;
+                                    "
+                                >
+                                    New Alt Text
+                                </th>
+                                <th
+                                    style="
+                                        padding: 7px 6px;
+                                        text-align: center;
+                                        border-bottom: 1px solid #ddd;
+                                        white-space: nowrap;
+                                    "
+                                >
+                                    GID
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="plusRenameTableBody"></tbody>
+                    </table>
+                </div>
+                <div
+                    id="plusRenameStatus"
+                    style="
+                        font-size: 0.82em;
+                        color: #555;
+                        margin-top: 10px;
+                        min-height: 18px;
+                    "
+                ></div>
+                <div
+                    id="plusRenameLog"
+                    style="
+                        display: none;
+                        margin-top: 8px;
+                        max-height: 120px;
+                        overflow-y: auto;
+                        background: #fafafa;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 6px;
+                        padding: 8px 10px;
+                        font-size: 0.78em;
+                        font-family: monospace;
+                        white-space: pre-wrap;
+                        color: #333;
+                    "
+                ></div>
+                <div
+                    style="
+                        display: flex;
+                        justify-content: flex-end;
+                        gap: 10px;
+                        margin-top: 14px;
+                    "
+                >
+                    <button
+                        id="plusRenameCancelBtn"
+                        onclick="closePlusRenameModal()"
+                        style="
+                            background: #f1f2f3;
+                            color: #333;
+                            border: 1px solid #ccc;
+                        "
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        id="plusRenameConfirmBtn"
+                        onclick="confirmPlusRename()"
+                        style="background: #6a1b9a; color: #fff; border: none"
+                        disabled
+                    >
+                        Confirm Rename
+                    </button>
+                </div>
+            </div>
+        </div>
 
         <script src="renderer.js"></script>
     </body>

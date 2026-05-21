@@ -222,6 +222,9 @@ function recoverLibrarySearchFocusability() {
     setTimeout(() => {
         const searchInput = document.getElementById("libSearch");
         if (!searchInput) return;
+        // Don't touch libSearch while multi-search mode is active
+        const multiPanel = document.getElementById("multiSearchPanel");
+        if (multiPanel && multiPanel.style.display !== "none") return;
         searchInput.disabled = false;
         searchInput.readOnly = false;
         searchInput.style.pointerEvents = "auto";
@@ -595,11 +598,127 @@ async function cleanupLibrary() {
     }
 }
 
+function toggleMultiSearch() {
+    const panel = document.getElementById("multiSearchPanel");
+    const btn = document.getElementById("multiSearchToggle");
+    const singleInput = document.getElementById("libSearch");
+    if (!panel || !btn) return;
+    const isOpen = panel.style.display !== "none";
+    if (isOpen) {
+        panel.style.display = "none";
+        btn.classList.remove("active");
+        btn.textContent = "☰ List Search";
+        singleInput.disabled = false;
+    } else {
+        panel.style.display = "block";
+        btn.classList.add("active");
+        btn.textContent = "✕ List Search";
+        singleInput.disabled = true;
+        singleInput.value = "";
+        document.getElementById("libMultiSearch").focus();
+        filterLibrary();
+    }
+}
+
 function filterLibrary() {
     const query = document.getElementById("libSearch").value.toLowerCase();
     const category = document
         .getElementById("categoryFilter")
         .value.toLowerCase();
+
+    // ── Multi-search mode ────────────────────────────────────────────────────
+    const multiPanel = document.getElementById("multiSearchPanel");
+    const multiActive = multiPanel && multiPanel.style.display !== "none";
+    if (multiActive) {
+        const rawLines = document.getElementById("libMultiSearch").value;
+        const terms = rawLines
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
+
+        const notFoundEl = document.getElementById("multiSearchNotFound");
+
+        if (terms.length === 0) {
+            if (notFoundEl) notFoundEl.style.display = "none";
+            renderGallery([], "fullLibraryArea");
+            return;
+        }
+
+        const excludeTiktok = document.getElementById("excludeTiktok")?.checked;
+        const isTiktokProduct = (p) =>
+            (p.title && p.title.toLowerCase().includes("tiktok")) ||
+            (p.productName && p.productName.toLowerCase().includes("tiktok")) ||
+            (p.folderName && p.folderName.toLowerCase().includes("tiktok"));
+
+        // Match each term to a product (exact first, then contains fallback)
+        const matchProduct = (term) => {
+            const t = term.toLowerCase();
+            const allowed = (p) => !(excludeTiktok && isTiktokProduct(p));
+            // Exact match on handle or sku
+            let hit = cachedLibrary.find(
+                (p) =>
+                    allowed(p) &&
+                    ((p.handle && p.handle.toLowerCase() === t) ||
+                        (p.sku && p.sku.toLowerCase() === t) ||
+                        (p.folderName && p.folderName.toLowerCase() === t)),
+            );
+            if (!hit) {
+                // Contains fallback
+                hit = cachedLibrary.find(
+                    (p) =>
+                        allowed(p) &&
+                        ((p.handle && p.handle.toLowerCase().includes(t)) ||
+                            (p.sku && p.sku.toLowerCase().includes(t)) ||
+                            (p.folderName &&
+                                p.folderName.toLowerCase().includes(t)) ||
+                            (p.title && p.title.toLowerCase().includes(t)) ||
+                            (p.productName &&
+                                p.productName.toLowerCase().includes(t))),
+                );
+            }
+            return hit || null;
+        };
+
+        const notFound = [];
+        const seen = new Set();
+        const ordered = [];
+
+        for (const term of terms) {
+            const prod = matchProduct(term);
+            if (prod) {
+                const key = prod.handle || prod.sku || prod.title;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    ordered.push(prod);
+                }
+            } else {
+                notFound.push(term);
+            }
+        }
+
+        // Show not-found banner
+        if (notFoundEl) {
+            if (notFound.length > 0) {
+                notFoundEl.style.display = "block";
+                notFoundEl.innerHTML =
+                    `<strong>⚠ Not found (${notFound.length}):</strong> ` +
+                    notFound
+                        .map(
+                            (t) =>
+                                `<span style="display:inline-block;background:#ffc107;color:#333;border-radius:4px;padding:1px 7px;margin:2px 3px;font-family:monospace;font-size:12px;">${t}</span>`,
+                        )
+                        .join("");
+            } else {
+                notFoundEl.style.display = "none";
+            }
+        }
+
+        renderGallery(ordered, "fullLibraryArea");
+        return;
+    }
+    // ── End multi-search ─────────────────────────────────────────────────────
+
+    const excludeTiktok = document.getElementById("excludeTiktok")?.checked;
 
     const filtered = cachedLibrary.filter((p) => {
         // 1. Matches Search Text
@@ -618,6 +737,13 @@ function filterLibrary() {
                 (p.category && p.category.toLowerCase() === category) ||
                 (p.tags && p.tags.includes(category));
         }
+
+        // 3. Exclude TikTok products
+        const isTiktok =
+            (p.title && p.title.toLowerCase().includes("tiktok")) ||
+            (p.productName && p.productName.toLowerCase().includes("tiktok")) ||
+            (p.folderName && p.folderName.toLowerCase().includes("tiktok"));
+        if (excludeTiktok && isTiktok) return false;
 
         return matchesText && matchesCategory;
     });
@@ -2946,6 +3072,26 @@ function initSearchListener() {
                 filterLibrary();
             }
         });
+
+        // If user pastes multi-line content, auto-switch to List Search mode
+        searchInput.addEventListener("paste", (e) => {
+            const text = (e.clipboardData || window.clipboardData).getData(
+                "text",
+            );
+            if (!text.includes("\n")) return;
+            e.preventDefault();
+            // Switch to multi-search mode if not already active
+            const panel = document.getElementById("multiSearchPanel");
+            if (panel && panel.style.display === "none") {
+                toggleMultiSearch();
+            }
+            const ta = document.getElementById("libMultiSearch");
+            if (ta) {
+                ta.value = text.trim();
+                ta.focus();
+                filterLibrary();
+            }
+        });
     }
 }
 
@@ -3416,3 +3562,263 @@ ipcRenderer.on("shipping-progress", (event, data) => {
         if (progressMsg) progressMsg.textContent = "";
     }
 });
+
+// ============ BULK RENAME PLUS IMAGES ============
+
+let _plusRenameItems = []; // resolved items from prepare step
+let _plusRenameProductMeta = {}; // per-product metafield info for post-rename patching
+
+async function showPlusRenameModal() {
+    const shopUrl = localStorage.getItem("lastShop") || "";
+    const apiKey = localStorage.getItem("lastKey") || "";
+    const metafieldKeys = localStorage.getItem("lastMetafields") || "";
+    const folderPath = selectedPath;
+
+    if (!shopUrl || !apiKey) {
+        alert(
+            "Please enter your Shopify URL and API key in the Sync tab first.",
+        );
+        return;
+    }
+    if (!folderPath) {
+        alert("Please select a download folder in the Sync tab first.");
+        return;
+    }
+
+    const modal = document.getElementById("plusRenameModal");
+    const subtitle = document.getElementById("plusRenameSubtitle");
+    const warning = document.getElementById("plusRenameWarning");
+    const tbody = document.getElementById("plusRenameTableBody");
+    const status = document.getElementById("plusRenameStatus");
+    const confirmBtn = document.getElementById("plusRenameConfirmBtn");
+
+    // Reset state
+    _plusRenameItems = [];
+    tbody.innerHTML = "";
+    warning.style.display = "none";
+    confirmBtn.disabled = true;
+    subtitle.textContent = "Scanning manifest and resolving Shopify file IDs…";
+    status.textContent = "";
+
+    modal.style.display = "flex";
+
+    try {
+        const result = await ipcRenderer.invoke("prepare-plus-rename", {
+            shopUrl,
+            apiKey,
+            metafieldKeys,
+            folderPath,
+        });
+
+        if (result.error) {
+            subtitle.textContent = "Configuration error:";
+            status.textContent = result.error;
+            status.style.color = "#c62828";
+            return;
+        }
+
+        const items = result.items || [];
+        const unresolvedCount = result.unresolvedCount || 0;
+
+        if (items.length === 0) {
+            subtitle.textContent = "No plus images found in the manifest.";
+            status.textContent =
+                "Sync first so plus images appear in the manifest.";
+            return;
+        }
+
+        const resolvedCount = items.filter((i) => i.resolved).length;
+        subtitle.textContent = `${items.length} image(s) across ${new Set(items.map((i) => i.handle)).size} product(s) — ${resolvedCount} resolved, ${unresolvedCount} unresolved (will be skipped).`;
+
+        if (unresolvedCount > 0) {
+            warning.style.display = "block";
+            warning.textContent = `⚠ ${unresolvedCount} image(s) could not be matched to a Shopify file ID and will be skipped. Sync again to refresh CDN URLs, then retry.`;
+        }
+
+        // Build table rows
+        items.forEach((item) => {
+            const tr = document.createElement("tr");
+            tr.style.borderBottom = "1px solid #f0f0f0";
+            if (!item.resolved) tr.style.opacity = "0.45";
+
+            const statusIcon = item.resolved ? "✓" : "⚠";
+            const statusColor = item.resolved ? "#2e7d32" : "#e65100";
+
+            tr.innerHTML = `
+                <td style="padding:5px 10px; font-family: monospace; font-size:0.95em">${escHtml(item.handle)}</td>
+                <td style="padding:5px 10px; text-align:center">${item.order}</td>
+                <td style="padding:5px 10px; color:#777; word-break:break-all">${escHtml(item.currentFilename)}</td>
+                <td style="padding:5px 10px; font-weight:600; word-break:break-all">${escHtml(item.newFilename)}</td>
+                <td style="padding:5px 10px; color:#444; font-style:italic; word-break:break-all">${escHtml(item.newAlt)}</td>
+                <td style="padding:5px 6px; text-align:center; color:${statusColor}; font-weight:700">${statusIcon}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        _plusRenameItems = items;
+        _plusRenameProductMeta = result.productMeta || {};
+        confirmBtn.disabled = resolvedCount === 0;
+        status.textContent =
+            resolvedCount > 0
+                ? `Ready to rename ${resolvedCount} file(s).`
+                : "No resolvable files found.";
+        status.style.color = resolvedCount > 0 ? "#1b5e20" : "#c62828";
+    } catch (err) {
+        subtitle.textContent = "Failed to prepare rename plan.";
+        status.textContent = err.message;
+        status.style.color = "#c62828";
+    }
+}
+
+function closePlusRenameModal() {
+    const modal = document.getElementById("plusRenameModal");
+    modal.style.display = "none";
+    _plusRenameItems = [];
+    _plusRenameProductMeta = {};
+    const log = document.getElementById("plusRenameLog");
+    if (log) {
+        log.style.display = "none";
+        log.textContent = "";
+    }
+}
+
+async function confirmPlusRename() {
+    const shopUrl = localStorage.getItem("lastShop") || "";
+    const apiKey = localStorage.getItem("lastKey") || "";
+    const status = document.getElementById("plusRenameStatus");
+    const confirmBtn = document.getElementById("plusRenameConfirmBtn");
+    const cancelBtn = document.getElementById("plusRenameCancelBtn");
+
+    const toRename = _plusRenameItems.filter((i) => i.resolved);
+    if (toRename.length === 0) return;
+    const gidToItem = new Map(toRename.map((i) => [i.gid, i]));
+
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    status.textContent = `Renaming ${toRename.length} file(s)…`;
+    status.style.color = "#555";
+
+    const resultLogEl = document.getElementById("plusRenameLog");
+    if (resultLogEl) {
+        resultLogEl.style.display = "none";
+        resultLogEl.textContent = "";
+    }
+
+    try {
+        const result = await ipcRenderer.invoke("execute-plus-rename", {
+            shopUrl,
+            apiKey,
+            updates: toRename,
+            productMeta: _plusRenameProductMeta,
+        });
+
+        const s = result.succeeded?.length || 0;
+        const f = result.failed?.length || 0;
+        const patched = result.metafieldsPatchedCount || 0;
+        const patchNote =
+            patched > 0 ? ` Metafields updated for ${patched} product(s).` : "";
+
+        // Build precise log lines for UI display
+        const logLines = [];
+        if (result.failed?.length) {
+            for (const fail of result.failed) {
+                const item = gidToItem.get(fail.id);
+                const label = item
+                    ? `${item.currentFilename} → ${item.newFilename}`
+                    : fail.id || "unknown";
+                const codePrefix = fail.code ? `${fail.code} — ` : "";
+                logLines.push(`❌ ${label}: ${codePrefix}${fail.error}`);
+            }
+        }
+        if (result.metafieldsPatchError) {
+            logLines.push(`⚠ Metafield patch: ${result.metafieldsPatchError}`);
+        }
+        if (resultLogEl && logLines.length > 0) {
+            resultLogEl.textContent = logLines.join("\n");
+            resultLogEl.style.display = "block";
+        }
+
+        if (f === 0 && !result.metafieldsPatchError) {
+            status.textContent = `✓ Done — ${s} file(s) renamed successfully.${patchNote}`;
+            status.style.color = "#1b5e20";
+        } else if (f === 0) {
+            status.textContent = `⚠ Renames done (${s}), but metafield patch failed. See log below.`;
+            status.style.color = "#e65100";
+        } else {
+            status.textContent = `⚠ Completed: ${s} renamed, ${f} failed.${patchNote} See log below.`;
+            status.style.color = "#e65100";
+        }
+
+        _plusRenameItems = [];
+        confirmBtn.textContent = "Done";
+        confirmBtn.disabled = false;
+        confirmBtn.onclick = closePlusRenameModal;
+        cancelBtn.disabled = false;
+    } catch (err) {
+        status.textContent = `Error: ${err.message}`;
+        status.style.color = "#c62828";
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+    }
+}
+
+function escHtml(str) {
+    return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+async function patchPlusMetafields() {
+    const shopUrl = localStorage.getItem("lastShop") || "";
+    const apiKey = localStorage.getItem("lastKey") || "";
+    const metafieldKeys = localStorage.getItem("lastMetafields") || "";
+    const folderPath = selectedPath;
+
+    if (!shopUrl || !apiKey) {
+        alert(
+            "Please enter your Shopify URL and API key in the Sync tab first.",
+        );
+        return;
+    }
+    if (!folderPath) {
+        alert("Please select a download folder in the Sync tab first.");
+        return;
+    }
+
+    const btn = document.getElementById("floatPatchPlusBtn");
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Patching\u2026";
+
+    try {
+        const result = await ipcRenderer.invoke("patch-plus-metafields", {
+            shopUrl,
+            apiKey,
+            metafieldKeys,
+            folderPath,
+        });
+
+        const summary = [
+            `\u2713 Patched: ${result.patched} product(s)`,
+            result.skipped > 0
+                ? `\u26a0 Skipped: ${result.skipped} (new filenames not yet on Shopify \u2014 sync first?)`
+                : null,
+            result.failed > 0 ? `\u2717 Failed: ${result.failed}` : null,
+        ]
+            .filter(Boolean)
+            .join("  |  ");
+
+        const logModal = document.getElementById("patchPlusLogModal");
+        document.getElementById("patchPlusLogSummary").textContent = summary;
+        document.getElementById("patchPlusLogText").value =
+            (result.logs || []).join("\n") || "(no log output)";
+        logModal.style.display = "flex";
+    } catch (err) {
+        alert(`Patch failed: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}

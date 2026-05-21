@@ -1,4 +1,5 @@
 const axios = require("axios");
+const path = require("path");
 
 class ShopifyClient {
     constructor(domain, accessToken) {
@@ -1240,6 +1241,216 @@ class ShopifyClient {
             `[Shopify] Export complete: ${allProducts.length} total products fetched in ${pageCount} pages`,
         );
         return allProducts;
+    }
+
+    async getFilesMetaByFilenames(filenames = []) {
+        if (!Array.isArray(filenames) || filenames.length === 0)
+            return new Map();
+
+        const resultMap = new Map(); // filename -> { id, url, alt }
+        const BATCH_SIZE = 50;
+
+        const filesQuery = `
+        query filesLookup($query: String!) {
+            files(first: 250, query: $query) {
+                edges {
+                    node {
+                        ... on MediaImage {
+                            id
+                            alt
+                            image { url }
+                        }
+                        ... on GenericFile {
+                            id
+                            alt
+                            url
+                        }
+                    }
+                }
+            }
+        }`;
+
+        for (let i = 0; i < filenames.length; i += BATCH_SIZE) {
+            const batch = filenames.slice(i, i + BATCH_SIZE);
+            const queryStr = batch
+                .map((fn) => `filename:"${fn.replace(/"/g, '\\"')}"`)
+                .join(" OR ");
+
+            try {
+                const data = await this._request(filesQuery, { query: queryStr });
+                for (const edge of data?.files?.edges || []) {
+                    const node = edge?.node;
+                    if (!node?.id) continue;
+                    const url = (node.image?.url || node.url || "").split("?")[0];
+                    if (!url) continue;
+                    const filename = path.basename(decodeURIComponent(url));
+                    if (batch.includes(filename)) {
+                        resultMap.set(filename, { id: node.id, url, alt: node.alt || "" });
+                    }
+                }
+            } catch (err) {
+                console.error("[getFilesMetaByFilenames] Batch failed:", err.message);
+            }
+        }
+
+        return resultMap;
+    }
+
+    async resolveFileGidsByFilenames(fileEntries = []) {
+        if (!Array.isArray(fileEntries) || fileEntries.length === 0) {
+            return new Map();
+        }
+
+        const resultMap = new Map(); // cleanUrl -> { id, currentAlt }
+        const BATCH_SIZE = 50;
+
+        const filesQuery = `
+        query filesLookup($query: String!) {
+            files(first: 250, query: $query) {
+                edges {
+                    node {
+                        ... on MediaImage {
+                            id
+                            alt
+                            image { url }
+                        }
+                        ... on GenericFile {
+                            id
+                            alt
+                            url
+                        }
+                    }
+                }
+            }
+        }`;
+
+        for (let i = 0; i < fileEntries.length; i += BATCH_SIZE) {
+            const batch = fileEntries.slice(i, i + BATCH_SIZE);
+
+            const queryStr = batch
+                .map((e) => `filename:"${e.filename.replace(/"/g, '\\"')}"`)
+                .join(" OR ");
+
+            try {
+                const data = await this._request(filesQuery, {
+                    query: queryStr,
+                });
+                const edges = data?.files?.edges || [];
+
+                for (const edge of edges) {
+                    const node = edge?.node;
+                    if (!node?.id) continue;
+
+                    const nodeUrl = (
+                        node.image?.url ||
+                        node.url ||
+                        ""
+                    ).split("?")[0];
+                    if (!nodeUrl) continue;
+
+                    const nodeFilename = path.basename(
+                        decodeURIComponent(nodeUrl),
+                    );
+
+                    for (const entry of batch) {
+                        // Match by filename (more robust than URL comparison,
+                        // handles /products/ vs /files/ CDN path differences)
+                        if (nodeFilename === entry.filename) {
+                            resultMap.set(entry.url, {
+                                id: node.id,
+                                currentAlt: node.alt || "",
+                                currentFilename: nodeFilename,
+                            });
+                            break;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(
+                    "[resolveFileGids] Batch query failed:",
+                    err.message,
+                );
+            }
+        }
+
+        return resultMap;
+    }
+
+    async bulkRenameFiles(updates = []) {
+        if (!Array.isArray(updates) || updates.length === 0) {
+            return { succeeded: [], failed: [] };
+        }
+
+        const mutation = `
+        mutation fileUpdate($files: [FileUpdateInput!]!) {
+            fileUpdate(files: $files) {
+                files {
+                    id
+                    alt
+                    ... on MediaImage {
+                        image { url }
+                    }
+                    ... on GenericFile {
+                        url
+                    }
+                }
+                userErrors {
+                    field
+                    message
+                    code
+                }
+            }
+        }`;
+
+        const succeeded = [];
+        const failed = [];
+        const BATCH_SIZE = 250;
+
+        for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+            const batch = updates.slice(i, i + BATCH_SIZE);
+
+            try {
+                const data = await this._request(mutation, { files: batch });
+                const result = data?.fileUpdate;
+                const userErrors = result?.userErrors || [];
+                const erroredIds = new Set();
+
+                if (userErrors.length > 0) {
+                    userErrors.forEach((e) => {
+                        // field is e.g. ["files", "2", "filename"] — index into the batch
+                        const idx =
+                            e.field?.[1] !== undefined
+                                ? parseInt(e.field[1])
+                                : -1;
+                        const failedId =
+                            idx >= 0 ? (batch[idx]?.id || null) : null;
+                        if (failedId) erroredIds.add(failedId);
+                        failed.push({
+                            id: failedId,
+                            error: e.message,
+                            code: e.code || "",
+                        });
+                    });
+                }
+
+                (result?.files || []).forEach((f) => {
+                    if (!erroredIds.has(f.id)) {
+                        succeeded.push({
+                            id: f.id,
+                            newUrl: (f.image?.url || f.url || "").split(
+                                "?",
+                            )[0],
+                        });
+                    }
+                });
+            } catch (err) {
+                batch.forEach((u) =>
+                    failed.push({ id: u.id, error: err.message }),
+                );
+            }
+        }
+
+        return { succeeded, failed };
     }
 
     async _request(query, variables = {}) {

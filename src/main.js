@@ -1039,6 +1039,527 @@ ipcMain.handle(
     },
 );
 
+// ============ BULK RENAME PLUS IMAGES ============
+
+ipcMain.handle(
+    "prepare-plus-rename",
+    async (event, { shopUrl, apiKey, metafieldKeys, folderPath }) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!folderPath) throw new Error("Missing folder path");
+
+        const manifest = new ManifestManager(folderPath);
+        await manifest.load();
+
+        const client = new ShopifyClient(shopUrl, apiKey);
+        const allProducts = manifest.getAllProducts();
+
+        const parseKeys = (str = "") =>
+            str
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .map((s) => {
+                    const dot = s.indexOf(".");
+                    return dot > -1
+                        ? {
+                              namespace: s.slice(0, dot),
+                              key: s.slice(dot + 1),
+                          }
+                        : { namespace: "custom", key: s };
+                });
+
+        const isMoreDescriptionKey = (key = "") => {
+            const n = key.toLowerCase();
+            return (
+                n.endsWith("more_description") || n.endsWith("moredescription")
+            );
+        };
+
+        const keys = parseKeys(metafieldKeys || "");
+        const mfIndex = keys.findIndex(({ key }) => isMoreDescriptionKey(key));
+        if (mfIndex < 0) {
+            return {
+                items: [],
+                unresolvedCount: 0,
+                error: "No more_description metafield key configured. Add a key ending in 'more_description' in the dashboard.",
+            };
+        }
+
+        const plusHandles = Object.entries(allProducts)
+            .filter(([, prod]) =>
+                (prod.media || []).some((m) => m.group === "plus"),
+            )
+            .map(([handle, prod]) => ({
+                handle,
+                title: prod.title || handle,
+            }));
+
+        if (plusHandles.length === 0) {
+            return { items: [], unresolvedCount: 0 };
+        }
+
+        const allItems = [];
+        const productMeta = {}; // handle -> { productId, namespace, key, rawValue }
+        let unresolvedCount = 0;
+
+        // Process products concurrently: context fetch + GID resolution per product
+        const CONCURRENCY = 10;
+        for (let i = 0; i < plusHandles.length; i += CONCURRENCY) {
+            const chunk = plusHandles.slice(i, i + CONCURRENCY);
+            const chunkResults = await Promise.all(
+                chunk.map(async ({ handle, title }) => {
+                    try {
+                        const product = await client.getProductMediaContext(
+                            handle,
+                            metafieldKeys,
+                        );
+                        if (!product) return null;
+
+                        const mf = product[`mf_${mfIndex}`];
+                        if (!mf?.value) return null;
+
+                        let jsonItems = [];
+                        try {
+                            const parsed = JSON.parse(mf.value);
+                            if (Array.isArray(parsed)) jsonItems = parsed;
+                        } catch {
+                            return null;
+                        }
+
+                        const fileEntries = jsonItems
+                            .map((item, idx) => {
+                                const rawUrl =
+                                    typeof item === "string"
+                                        ? item
+                                        : item?.url || item?.src || "";
+                                const cleanUrl = rawUrl.split("?")[0];
+                                const filename = path.basename(
+                                    decodeURIComponent(cleanUrl),
+                                );
+                                return {
+                                    filename,
+                                    url: cleanUrl,
+                                    order: idx + 1,
+                                };
+                            })
+                            .filter((e) => e.url && e.filename);
+
+                        if (fileEntries.length === 0) return null;
+
+                        const gidMap =
+                            await client.resolveFileGidsByFilenames(
+                                fileEntries,
+                            );
+
+                        return { handle, title, product, fileEntries, gidMap };
+                    } catch (err) {
+                        console.error(
+                            `[PlusRename] Prep failed for ${handle}:`,
+                            err.message,
+                        );
+                        return null;
+                    }
+                }),
+            );
+
+            for (const res of chunkResults) {
+                if (!res) continue;
+                const { handle, title, product, fileEntries, gidMap } = res;
+                const productTitle = product.title || title;
+                const mf = product[`mf_${mfIndex}`];
+
+                productMeta[handle] = {
+                    productId: product.id,
+                    namespace: keys[mfIndex].namespace,
+                    key: keys[mfIndex].key,
+                    rawValue: mf.value,
+                    type: mf.type || "json",
+                };
+
+                for (const { filename, url, order } of fileEntries) {
+                    const ext = path.extname(filename) || ".jpg";
+                    const newFilename = `${handle}-plus-${String(order).padStart(2, "0")}${ext}`;
+                    const newAlt = `Extra Featured Image ${order} of ${productTitle}`;
+                    const resolved = gidMap.get(url);
+
+                    if (
+                        resolved &&
+                        resolved.currentFilename === newFilename &&
+                        resolved.currentAlt === newAlt
+                    ) {
+                        continue;
+                    }
+
+                    allItems.push({
+                        handle,
+                        title: productTitle,
+                        order,
+                        gid: resolved?.id || null,
+                        url,
+                        currentFilename: filename,
+                        newFilename,
+                        newAlt,
+                        resolved: !!resolved,
+                    });
+
+                    if (!resolved) unresolvedCount++;
+                }
+            }
+        }
+
+        allItems.sort(
+            (a, b) => a.handle.localeCompare(b.handle) || a.order - b.order,
+        );
+
+        return { items: allItems, unresolvedCount, productMeta };
+    },
+);
+
+ipcMain.handle(
+    "execute-plus-rename",
+    async (event, { shopUrl, apiKey, updates, productMeta }) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!Array.isArray(updates) || updates.length === 0)
+            throw new Error("No rename updates provided");
+
+        const client = new ShopifyClient(shopUrl, apiKey);
+
+        const fileUpdates = updates.map((u) => ({
+            id: u.gid,
+            filename: u.newFilename,
+            alt: u.newAlt,
+        }));
+
+        // Detect forward naming conflicts: a rename whose target filename is currently
+        // held by another file that is also being renamed in this batch (e.g. a swap or
+        // reorder). Shopify processes the batch atomically so ordering cannot be controlled
+        // — use a two-pass temp-rename to break the cycle.
+        const currentFilenameSet = new Set(
+            updates.map((u) => u.currentFilename),
+        );
+        const hasConflict = updates.some(
+            (u) =>
+                u.newFilename !== u.currentFilename &&
+                currentFilenameSet.has(u.newFilename),
+        );
+
+        let result;
+        if (hasConflict) {
+            console.log(
+                "[PlusRename] Naming conflicts detected — using two-pass temp rename.",
+            );
+            // Pass 1: rename all files to guaranteed-unique temp names
+            const tmpUpdates = updates.map((u) => {
+                const { name, ext } = path.parse(u.newFilename);
+                return {
+                    id: u.gid,
+                    filename: `${name}--rnm${ext}`,
+                    alt: u.newAlt,
+                };
+            });
+            const pass1 = await client.bulkRenameFiles(tmpUpdates);
+
+            // Pass 2: rename to final names (for pass1 successes: temp→final;
+            // for pass1 failures: original→final retry, now unblocked)
+            const pass2 = await client.bulkRenameFiles(fileUpdates);
+
+            // Final status is determined by pass2 (did the file reach its target name?)
+            result = { succeeded: pass2.succeeded, failed: pass2.failed };
+
+            // Any file that failed both passes: keep its pass1 failure record for richer error info
+            const pass2FailedIds = new Set(pass2.failed.map((f) => f.id));
+            for (const f of pass1.failed) {
+                if (f.id && pass2FailedIds.has(f.id)) {
+                    const existing = result.failed.find((e) => e.id === f.id);
+                    if (existing && !existing.pass1Error)
+                        existing.pass1Error = f.error;
+                }
+            }
+        } else {
+            result = await client.bulkRenameFiles(fileUpdates);
+        }
+
+        console.log(
+            `[PlusRename] Done. Succeeded: ${result.succeeded.length}, Failed: ${result.failed.length}`,
+        );
+
+        // Patch more_description metafields with new CDN URLs so next sync resolves correctly
+        const alreadyNamedIds = new Set(
+            (result.failed || [])
+                .filter((f) => f.code === "FILENAME_ALREADY_EXISTS" && f.id)
+                .map((f) => f.id),
+        );
+        const hasAnyResolved =
+            result.succeeded.length > 0 || alreadyNamedIds.size > 0;
+        if (hasAnyResolved && productMeta) {
+            // Build gid -> newUrl map by reconstructing the new CDN URL from the old URL.
+            // We cannot rely on the mutation response URL — fileUpdate is async on Shopify's
+            // side so the returned URL is often still the old stale value.
+            const succeededIds = new Set(result.succeeded.map((s) => s.id));
+            // FILENAME_ALREADY_EXISTS means the file is already correctly named — treat as
+            // resolved for metafield patching purposes (idempotent rename).
+            const resolvedIds = new Set([...succeededIds, ...alreadyNamedIds]);
+            // Map old URL -> { newUrl, newAlt } using URL reconstruction (mutation response
+            // URL is stale because fileUpdate is async on Shopify's side).
+            const oldUrlToNewData = new Map();
+            for (const u of updates) {
+                if (!resolvedIds.has(u.gid) || !u.url) continue;
+                const dir = u.url.substring(0, u.url.lastIndexOf("/") + 1);
+                oldUrlToNewData.set(u.url, {
+                    newUrl: dir + u.newFilename,
+                    newAlt: u.newAlt,
+                });
+            }
+
+            const metafieldUpdates = [];
+            for (const [handle, meta] of Object.entries(productMeta)) {
+                // Only patch products that had at least one resolved rename
+                const hasUpdate = updates.some(
+                    (u) => u.handle === handle && resolvedIds.has(u.gid),
+                );
+                if (!hasUpdate) continue;
+
+                try {
+                    let jsonArr = JSON.parse(meta.rawValue);
+                    if (!Array.isArray(jsonArr)) continue;
+
+                    jsonArr = jsonArr.map((item) => {
+                        const oldUrl =
+                            typeof item === "string"
+                                ? item
+                                : item?.url || item?.src || "";
+                        const cleanOld = oldUrl.split("?")[0];
+                        const newData = oldUrlToNewData.get(cleanOld);
+                        if (!newData) return item;
+                        if (typeof item === "string") return newData.newUrl;
+                        return {
+                            ...item,
+                            url: newData.newUrl,
+                            alt: newData.newAlt,
+                        };
+                    });
+
+                    metafieldUpdates.push({
+                        ownerId: meta.productId,
+                        namespace: meta.namespace,
+                        key: meta.key,
+                        type: meta.type || "json",
+                        value: JSON.stringify(jsonArr),
+                    });
+                } catch (err) {
+                    console.error(
+                        `[PlusRename] Metafield patch failed for ${handle}:`,
+                        err.message,
+                    );
+                }
+            }
+
+            if (metafieldUpdates.length > 0) {
+                try {
+                    await client._setMetafields(metafieldUpdates);
+                    console.log(
+                        `[PlusRename] Patched more_description for ${metafieldUpdates.length} product(s).`,
+                    );
+                    result.metafieldsPatchedCount = metafieldUpdates.length;
+                } catch (err) {
+                    console.error(
+                        `[PlusRename] Metafields patch error:`,
+                        err.message,
+                    );
+                    result.metafieldsPatchError = err.message;
+                }
+            }
+        }
+
+        return result;
+    },
+);
+
+ipcMain.handle(
+    "patch-plus-metafields",
+    async (event, { shopUrl, apiKey, metafieldKeys, folderPath }) => {
+        if (!shopUrl || !apiKey)
+            throw new Error("Missing Shop URL or API Token");
+        if (!folderPath) throw new Error("Missing folder path");
+
+        const manifest = new ManifestManager(folderPath);
+        await manifest.load();
+        const client = new ShopifyClient(shopUrl, apiKey);
+        const allProducts = manifest.getAllProducts();
+
+        const parseKeys = (str = "") =>
+            str
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .map((s) => {
+                    const dot = s.indexOf(".");
+                    return dot > -1
+                        ? { namespace: s.slice(0, dot), key: s.slice(dot + 1) }
+                        : { namespace: "custom", key: s };
+                });
+        const isMoreDescriptionKey = (key = "") => {
+            const n = key.toLowerCase();
+            return (
+                n.endsWith("more_description") || n.endsWith("moredescription")
+            );
+        };
+
+        const keys = parseKeys(metafieldKeys || "");
+        const mfIndex = keys.findIndex(({ key }) => isMoreDescriptionKey(key));
+        if (mfIndex < 0)
+            throw new Error("No more_description metafield key configured.");
+
+        const { namespace, key: mfKey } = keys[mfIndex];
+
+        // Resolve actual metafield type from Shopify (first product with plus images)
+        let metafieldType = "json"; // fallback
+        const firstHandle = Object.entries(allProducts).find(([, prod]) =>
+            (prod.media || []).some((m) => m.group === "plus"),
+        )?.[0];
+        if (firstHandle) {
+            try {
+                const sample = await client.getProductMediaContext(
+                    firstHandle,
+                    metafieldKeys,
+                );
+                const sampleMf = sample?.[`mf_${mfIndex}`];
+                if (sampleMf?.type) metafieldType = sampleMf.type;
+                console.log(
+                    `[PatchPlus] Metafield type resolved: ${metafieldType}`,
+                );
+            } catch (err) {
+                console.warn(
+                    `[PatchPlus] Could not resolve metafield type, using 'json':`,
+                    err.message,
+                );
+            }
+        }
+
+        // Build expected new filenames from manifest plus group
+        const productEntries = [];
+        for (const [handle, prod] of Object.entries(allProducts)) {
+            const plusFiles = (prod.media || [])
+                .filter((m) => m.group === "plus")
+                .sort((a, b) => a.position - b.position);
+            if (plusFiles.length === 0) continue;
+
+            const plusEntries = plusFiles.map((m, idx) => {
+                const order = idx + 1;
+                const ext = path.extname(m.filename) || ".jpg";
+                const pad = String(order).padStart(2, "0");
+                return {
+                    order,
+                    newFilename: `${handle}-plus-${pad}${ext}`,
+                    altFilename: `${handle}-${pad}${ext}`, // fallback for files already renamed without -plus-
+                };
+            });
+
+            productEntries.push({ handle, productId: prod.id, plusEntries });
+        }
+
+        if (productEntries.length === 0)
+            return { patched: 0, skipped: 0, failed: 0 };
+
+        // Resolve new CDN URLs by querying Shopify files by new filename
+        const allNewFilenames = productEntries.flatMap((p) =>
+            p.plusEntries.flatMap((e) => [e.newFilename, e.altFilename]),
+        );
+        const fileMap = await client.getFilesMetaByFilenames(allNewFilenames);
+
+        const metafieldUpdates = [];
+        let skipped = 0;
+        const skipLogs = [];
+
+        for (const { handle, productId, plusEntries } of productEntries) {
+            const items = plusEntries.map(({ newFilename, altFilename }) => {
+                const meta =
+                    fileMap.get(newFilename) || fileMap.get(altFilename);
+                return meta ? { url: meta.url, alt: meta.alt || "" } : null;
+            });
+
+            if (items.some((item) => item === null)) {
+                const missing = plusEntries
+                    .filter((_, i) => items[i] === null)
+                    .map((e) => `${e.newFilename} / ${e.altFilename}`);
+                console.warn(
+                    `[PatchPlus] Skipping ${handle}: not found: ${missing.join(", ")}`,
+                );
+                skipLogs.push(
+                    `  SKIP ${handle}: not found on Shopify → ${missing.join(", ")}`,
+                );
+                skipped++;
+                continue;
+            }
+
+            metafieldUpdates.push({
+                ownerId: productId,
+                namespace,
+                key: mfKey,
+                type: metafieldType,
+                value: JSON.stringify(items),
+            });
+        }
+
+        if (metafieldUpdates.length === 0)
+            return {
+                patched: 0,
+                skipped,
+                failed: 0,
+                logs: [
+                    `Metafield type: ${metafieldType}`,
+                    `Products to patch: 0`,
+                    `Products skipped: ${skipped}`,
+                    "",
+                    ...skipLogs,
+                ],
+            };
+
+        // Batch metafield updates (25 per call)
+        const MF_BATCH = 25;
+        let failed = 0;
+        let patched = 0;
+        const logs = [
+            `Metafield type: ${metafieldType}`,
+            `Products to patch: ${metafieldUpdates.length}`,
+            `Products skipped: ${skipped}`,
+            "",
+            ...skipLogs,
+            "",
+        ];
+        for (let i = 0; i < metafieldUpdates.length; i += MF_BATCH) {
+            const batch = metafieldUpdates.slice(i, i + MF_BATCH);
+            const batchHandles = batch.map(
+                (u) =>
+                    Object.entries(allProducts).find(
+                        ([, p]) => p.id === u.ownerId,
+                    )?.[0] || u.ownerId,
+            );
+            try {
+                await client._setMetafields(batch);
+                patched += batch.length;
+                logs.push(
+                    `✓ Batch ${Math.floor(i / MF_BATCH) + 1}: patched [${batchHandles.join(", ")}]`,
+                );
+            } catch (err) {
+                console.error(
+                    `[PatchPlus] Metafields batch failed:`,
+                    err.message,
+                );
+                failed += batch.length;
+                logs.push(
+                    `✗ Batch ${Math.floor(i / MF_BATCH) + 1} FAILED: ${err.message}`,
+                );
+                logs.push(`  Handles: [${batchHandles.join(", ")}]`);
+            }
+        }
+
+        return { patched, skipped, failed, logs };
+    },
+);
+
 function csvToTsv(csvText) {
     const rows = [];
     let row = [];
@@ -1267,7 +1788,9 @@ function generateProductsCSV(products) {
                 "Option3 Linked To": "",
                 "Variant SKU": variant.sku || "",
                 "Variant Grams": "",
-                "Variant Inventory Tracker": inventoryItem.tracked ? "shopify" : "",
+                "Variant Inventory Tracker": inventoryItem.tracked
+                    ? "shopify"
+                    : "",
                 "Variant Inventory Qty": variant.inventoryQuantity || 0,
                 "Variant Inventory Policy": inventoryItem.tracked ? "deny" : "",
                 "Variant Fulfillment Service": "",
@@ -1345,10 +1868,13 @@ function generateProductsCSV(products) {
                 "Youtube Video Links (product.metafields.custom.youtube_video_links)":
                     getMetafieldValue(product, "mf_21.value") || "",
                 "Google: Custom Product (product.metafields.mm-google-shopping.custom_product)":
-                    getMetafieldValue(product, "metafieldGoogleProduct.value") ||
-                    "",
+                    getMetafieldValue(
+                        product,
+                        "metafieldGoogleProduct.value",
+                    ) || "",
                 "Fragrance (product.metafields.shopify.fragrance)":
-                    getMetafieldValue(product, "metafieldFragrance.value") || "",
+                    getMetafieldValue(product, "metafieldFragrance.value") ||
+                    "",
                 "Moisturizer type (product.metafields.shopify.moisturizer-type)":
                     getMetafieldValue(
                         product,
