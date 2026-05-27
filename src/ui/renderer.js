@@ -2109,6 +2109,7 @@ async function startSync() {
         const metafieldsInput = document.getElementById("metafields");
         const dryRunInput = document.getElementById("dryRun");
         const forceFullSyncInput = document.getElementById("forceFullSync");
+        const downloadVideosInput = document.getElementById("downloadVideos");
 
         if (!shopUrlInput || !apiKeyInput || !metafieldsInput || !dryRunInput) {
             throw new Error(
@@ -2122,6 +2123,9 @@ async function startSync() {
         const dryRun = dryRunInput.checked;
         const forceFullSync = forceFullSyncInput
             ? forceFullSyncInput.checked
+            : false;
+        const downloadVideos = downloadVideosInput
+            ? downloadVideosInput.checked
             : false;
 
         console.log("Config loaded", { shopUrl, dryRun, forceFullSync });
@@ -2152,6 +2156,7 @@ async function startSync() {
             metafieldKeys: metafields,
             dryRun,
             forceFullSync,
+            downloadVideos,
         };
         console.log("Invoking IPC start-sync");
         const results = await ipcRenderer.invoke("start-sync", config);

@@ -64,6 +64,7 @@ class SyncEngine {
         // 3. Diffing
         onProgress({ message: "Calculating Differences...", percent: 20 });
         const downloadQueue = [];
+        const placeholderQueue = []; // video placeholders (URL shortcut files)
         const processedHandles = new Set();
         const currentTimestamp = new Date().toISOString();
 
@@ -370,6 +371,10 @@ class SyncEngine {
                 const url = media.url;
                 const type = media.originalType || "image"; // Default to image for banners/extras
 
+                const isVideo = type === "video";
+                const useVideoPlaceholder =
+                    isVideo && !this.config.downloadVideos;
+
                 // Diff Logic
                 let status = "unchanged";
                 // Look up by composite "id:group" so the same Shopify GID used
@@ -381,13 +386,35 @@ class SyncEngine {
                 if (!localMedia) {
                     // NEW
                     status = "new";
+                    if (useVideoPlaceholder) {
+                        placeholderQueue.push({
+                            url,
+                            destPath: path.join(destFolder, filename),
+                        });
+                    } else {
+                        downloadQueue.push({
+                            url,
+                            destPath: path.join(destFolder, filename),
+                        });
+                    }
+                    this.changes.push({
+                        product: handle,
+                        type: "NEW_ASSET",
+                        file: filename,
+                    });
+                } else if (
+                    localMedia.type === "video_placeholder" &&
+                    this.config.downloadVideos
+                ) {
+                    // Was a placeholder — user now wants actual video downloaded
+                    status = "updated";
                     downloadQueue.push({
                         url,
                         destPath: path.join(destFolder, filename),
                     });
                     this.changes.push({
                         product: handle,
-                        type: "NEW_ASSET",
+                        type: "UPDATED_ASSET",
                         file: filename,
                     });
                 } else if (
@@ -397,10 +424,17 @@ class SyncEngine {
                 ) {
                     // Content updated — download to the newly computed filename
                     status = "updated";
-                    downloadQueue.push({
-                        url,
-                        destPath: path.join(destFolder, filename),
-                    });
+                    if (useVideoPlaceholder) {
+                        placeholderQueue.push({
+                            url,
+                            destPath: path.join(destFolder, filename),
+                        });
+                    } else {
+                        downloadQueue.push({
+                            url,
+                            destPath: path.join(destFolder, filename),
+                        });
+                    }
                     this.changes.push({
                         product: handle,
                         type: "UPDATED_ASSET",
@@ -421,7 +455,7 @@ class SyncEngine {
                     _fileId: media._fileId,
                     filename: filename,
                     position: positionCounter,
-                    type: type,
+                    type: useVideoPlaceholder ? "video_placeholder" : type,
                     lastStatus: status, // PERSIST STATUS TO MANIFEST
                     group: media.typeGroup, // PERSIST GROUP TO MANIFEST
                 });
@@ -431,7 +465,11 @@ class SyncEngine {
                     status === "unchanged" &&
                     !(await fs.pathExists(destFile))
                 ) {
-                    downloadQueue.push({ url, destPath: destFile });
+                    if (useVideoPlaceholder) {
+                        placeholderQueue.push({ url, destPath: destFile });
+                    } else {
+                        downloadQueue.push({ url, destPath: destFile });
+                    }
                     status = "restored";
                 }
 
@@ -562,6 +600,26 @@ class SyncEngine {
         }
 
         // 4. Execution
+
+        // Write video placeholder files (.url shortcut format)
+        if (placeholderQueue.length > 0 && !this.config.dryRun) {
+            for (const p of placeholderQueue) {
+                try {
+                    await fs.ensureDir(path.dirname(p.destPath));
+                    await fs.writeFile(
+                        p.destPath,
+                        `[InternetShortcut]\nURL=${p.url}\n`,
+                        "utf8",
+                    );
+                } catch (err) {
+                    console.error(
+                        `Failed to write video placeholder ${p.destPath}:`,
+                        err.message,
+                    );
+                }
+            }
+        }
+
         if (downloadQueue.length > 0) {
             if (this.config.dryRun) {
                 onProgress({

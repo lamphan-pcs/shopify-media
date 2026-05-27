@@ -73,7 +73,7 @@ class ShopifyClient {
                             }
                         }
                         ${metafieldQuery}
-                        media(first: 50) {
+                        media(first: 250) {
                             edges {
                                 node {
                                     ... on MediaImage {
@@ -1277,19 +1277,30 @@ class ShopifyClient {
                 .join(" OR ");
 
             try {
-                const data = await this._request(filesQuery, { query: queryStr });
+                const data = await this._request(filesQuery, {
+                    query: queryStr,
+                });
                 for (const edge of data?.files?.edges || []) {
                     const node = edge?.node;
                     if (!node?.id) continue;
-                    const url = (node.image?.url || node.url || "").split("?")[0];
+                    const url = (node.image?.url || node.url || "").split(
+                        "?",
+                    )[0];
                     if (!url) continue;
                     const filename = path.basename(decodeURIComponent(url));
                     if (batch.includes(filename)) {
-                        resultMap.set(filename, { id: node.id, url, alt: node.alt || "" });
+                        resultMap.set(filename, {
+                            id: node.id,
+                            url,
+                            alt: node.alt || "",
+                        });
                     }
                 }
             } catch (err) {
-                console.error("[getFilesMetaByFilenames] Batch failed:", err.message);
+                console.error(
+                    "[getFilesMetaByFilenames] Batch failed:",
+                    err.message,
+                );
             }
         }
 
@@ -1341,11 +1352,9 @@ class ShopifyClient {
                     const node = edge?.node;
                     if (!node?.id) continue;
 
-                    const nodeUrl = (
-                        node.image?.url ||
-                        node.url ||
-                        ""
-                    ).split("?")[0];
+                    const nodeUrl = (node.image?.url || node.url || "").split(
+                        "?",
+                    )[0];
                     if (!nodeUrl) continue;
 
                     const nodeFilename = path.basename(
@@ -1423,7 +1432,7 @@ class ShopifyClient {
                                 ? parseInt(e.field[1])
                                 : -1;
                         const failedId =
-                            idx >= 0 ? (batch[idx]?.id || null) : null;
+                            idx >= 0 ? batch[idx]?.id || null : null;
                         if (failedId) erroredIds.add(failedId);
                         failed.push({
                             id: failedId,
@@ -1437,9 +1446,7 @@ class ShopifyClient {
                     if (!erroredIds.has(f.id)) {
                         succeeded.push({
                             id: f.id,
-                            newUrl: (f.image?.url || f.url || "").split(
-                                "?",
-                            )[0],
+                            newUrl: (f.image?.url || f.url || "").split("?")[0],
                         });
                     }
                 });
